@@ -1,0 +1,102 @@
+/* OpenMate popup shell (M1 Step A3).
+   Uses only --openmate-* tokens from colors.css.
+   Single fixed light theme: no @media (prefers-color-scheme: dark). */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--openmate-bg-base-light);
+  color: #1f1f1f;
+  font-family: var(--openmate-font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.om-shell {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  min-width: 320px;
+  margin: 0 auto;
+  padding: 24px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  background: var(--openmate-bg-surface-light);
+  border: 1px solid var(--openmate-border-light);
+  border-radius: var(--openmate-radius-base);
+}
+
+.om-shell__header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.om-shell__logo {
+  width: 48px;
+  height: 48px;
+  display: block;
+}
+
+.om-shell__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.om-shell__status {
+  margin: 0;
+  text-align: center;
+  color: #444;
+  font-size: 13px;
+}
+
+.om-shell__primary {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--openmate-radius-base);
+  padding: 8px 20px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  background: var(--openmate-accent);
+  color: #ffffff;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.om-shell__primary:hover:not(:disabled) {
+  background: var(--openmate-accent-hover);
+}
+
+.om-shell__primary:focus-visible {
+  outline: none;
+  box-shadow: var(--openmate-shadow-focus);
+}
+
+.om-shell__primary:disabled {
+  background: var(--openmate-border-light);
+  color: #8a8a8a;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.om-shell__footer {
+  margin-top: 4px;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.om-shell__version {
+  font-size: 12px;
+  color: #8a8a8a;
+  letter-spacing: 0.02em;
+}

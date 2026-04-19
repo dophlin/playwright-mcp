@@ -14,85 +14,44 @@
  * limitations under the License.
  */
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { Button, TabItem  } from './tabItem';
 
-import type { TabInfo } from './tabItem';
-import { AuthTokenSection } from './authToken';
+const logoSrc = chrome.runtime.getURL('icons/icon-128.png');
+
+const manifestVersion = chrome.runtime.getManifest()?.version;
+const versionLabel = manifestVersion && typeof manifestVersion === 'string'
+  ? `v${manifestVersion}`
+  : 'v?';
 
 const StatusApp: React.FC = () => {
-  const [connectedTabs, setConnectedTabs] = useState<TabInfo[]>([]);
-
-  useEffect(() => {
-    void loadStatus();
-  }, []);
-
-  const loadStatus = async () => {
-    const { connectedTabIds } = await chrome.runtime.sendMessage({ type: 'getConnectionStatus' });
-    const tabs: TabInfo[] = [];
-    for (const tabId of (connectedTabIds as number[] ?? [])) {
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        tabs.push({
-          id: tab.id!,
-          windowId: tab.windowId!,
-          title: tab.title!,
-          url: tab.url!,
-          favIconUrl: tab.favIconUrl
-        });
-      } catch {
-        // Tab may have been closed.
-      }
-    }
-    setConnectedTabs(tabs);
-  };
-
-  const openTab = async (tabId: number) => {
-    await chrome.tabs.update(tabId, { active: true });
-    window.close();
-  };
-
-  const disconnect = async () => {
-    await chrome.runtime.sendMessage({ type: 'disconnect' });
-    window.close();
-  };
-
   return (
-    <div className='app-container'>
-      <div className='content-wrapper'>
-        {connectedTabs.length > 0 ? (
-          <div>
-            <div className='tab-section-title'>
-              {connectedTabs.length === 1 ? 'Page connected to Playwright client:' : 'Pages connected to Playwright client:'}
-            </div>
-            <div>
-              {connectedTabs.map((tab, index) => (
-                <TabItem
-                  key={tab.id}
-                  tab={tab}
-                  button={index === 0 ? (
-                    <Button variant='primary' onClick={disconnect}>
-                      Disconnect
-                    </Button>
-                  ) : undefined}
-                  onClick={() => openTab(tab.id)}
-                />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className='status-banner'>
-            No MCP clients are currently connected.
-          </div>
-        )}
-        <AuthTokenSection />
-      </div>
-    </div>
+    <main className='om-shell' aria-labelledby='om-shell-title'>
+      <header className='om-shell__header'>
+        <img className='om-shell__logo' src={logoSrc} alt='OpenMate' />
+        <h1 id='om-shell-title' className='om-shell__title'>OpenMate</h1>
+      </header>
+
+      <p className='om-shell__status' role='status'>
+        Not connected — sign in to begin
+      </p>
+
+      <button
+        type='button'
+        className='om-shell__primary'
+        disabled
+        aria-disabled='true'
+      >
+        Sign In
+      </button>
+
+      <footer className='om-shell__footer'>
+        <span className='om-shell__version'>{versionLabel}</span>
+      </footer>
+    </main>
   );
 };
 
-// Initialize the React app
 const container = document.getElementById('root');
 if (container) {
   const root = createRoot(container);
