@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # Set before `docker compose build`, e.g. `export GIT_COMMIT_SHA=$(git rev-parse HEAD)`.
+        # Dockploy: pass the same as a build argument from the clone SHA (see deploy runbook).
+        GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     image: openmate/playwright-mcp:local
     container_name: openmate-mcp
     restart: unless-stopped
