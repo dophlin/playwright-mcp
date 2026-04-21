@@ -889,3 +889,24 @@ SOFTWARE. */
     --color-scale-coral-9: #460701
   }
 }
+
+/* OpenMate design-system tokens (see documents/openmate-design-system.md) */
+:root {
+  --openmate-font-sans: 'Geist', system-ui, sans-serif;
+  --openmate-font-mono: 'Geist Mono', monospace;
+
+  --openmate-accent: #8b5cf6;        /* violet-500 */
+  --openmate-accent-hover: #7c3aed;  /* violet-600 */
+  --openmate-accent-light: #a78bfa;  /* violet-400 */
+
+  --openmate-bg-base-light: #fafafa;
+  --openmate-bg-surface-light: #ffffff;
+  --openmate-border-light: #e5e5e5;
+
+  --openmate-bg-base-dark: #0a0a0a;
+  --openmate-bg-surface-dark: #171717;
+  --openmate-border-dark: #262626;
+
+  --openmate-radius-base: 8px;
+  --openmate-shadow-focus: 0 0 0 3px rgba(139, 92, 246, 0.30);
+}

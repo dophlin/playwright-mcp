@@ -1,30 +1,52 @@
-# Playwright MCP Chrome Extension
+# OpenMate Extension
 
-## Introduction
-
-The Playwright MCP Chrome Extension allows you to connect to pages in your existing browser and leverage the state of your default user profile. This means the AI assistant can interact with websites where you're already logged in, using your existing cookies, sessions, and browser state, providing a seamless experience without requiring separate authentication or setup.
+The OpenMate Extension is a Chrome/Chromium extension that bridges the
+OpenMate MCP server to your existing browser profile. Instead of spinning
+up a fresh automation profile, OpenMate drives pages you are already
+signed in to — reusing your cookies, sessions, and storage — so AI agents
+can act on your real logged-in state without a separate login flow.
 
 ## Prerequisites
 
-- Chrome/Edge/Chromium browser
+- Chrome, Edge, or another Chromium-based browser (Developer Mode
+  available).
+- Node.js ≥ 18 and npm (only required if you are building from source).
 
-## Installation Steps
+## Install from source (local development)
 
-### Install the Extension
+This is the supported install path while OpenMate is pre-release. A
+Chrome Web Store listing will ship in a later milestone.
 
-Install [Playwright Extension](https://chromewebstore.google.com/detail/playwright-mcp-bridge/mmlmfjhmonkocbjadbfplnigmagldckm) from the Chrome Web Store.
+```bash
+# Inside the OpenMate monorepo checkout:
+cd playwright-mcp
+npm install
+cd packages/extension
+npm run build
+```
 
-### Configure Playwright MCP server
+Then load the built extension into Chrome:
 
-Configure Playwright MCP server to connect to the browser using the extension by passing the `--extension` option when running the MCP server:
+1. Open `chrome://extensions`.
+2. Turn on **Developer mode** (top-right).
+3. Click **Load unpacked** and select
+   `playwright-mcp/packages/extension/dist`.
+4. You should see **OpenMate Extension** appear in the extensions list
+   with the OpenMate icon.
+
+## Connecting the extension to the MCP server
+
+Run the OpenMate MCP server with the extension transport enabled (the
+exact server entry point depends on which OpenMate MCP server package you
+are using; it mirrors the upstream `--extension` flag):
 
 ```json
 {
   "mcpServers": {
-    "playwright-extension": {
+    "openmate-extension": {
       "command": "npx",
       "args": [
-        "@playwright/mcp@latest",
+        "<openmate-mcp-server-package>",
         "--extension"
       ]
     }
@@ -32,31 +54,25 @@ Configure Playwright MCP server to connect to the browser using the extension by
 }
 ```
 
-## Usage
+### Bypassing the connection approval dialog
 
-### Browser Tab Selection
+By default, the extension shows an approval dialog the first time the MCP
+server tries to attach to your browser. To skip that dialog on a trusted
+machine:
 
-When the LLM interacts with the browser for the first time, it will load a page where you can select which browser tab the LLM will connect to. This allows you to control which specific page the AI assistant will interact with during the session.
-
-### Bypassing the Connection Approval Dialog
-
-By default, you'll need to approve each connection when the MCP server tries to connect to your browser. To bypass this approval dialog and allow automatic connections, you can use an authentication token.
-
-#### Using Your Unique Authentication Token
-
-1. After installing the extension, click on the extension icon or navigate to the extension's status page
-2. Copy the `PLAYWRIGHT_MCP_EXTENSION_TOKEN` value displayed in the extension UI
-3. Add it to your MCP server configuration:
+1. Click the OpenMate Extension action, or open its status page.
+2. Copy the token value displayed in the popup.
+3. Add it to your MCP server config as an environment variable named
+   after your token variable (the upstream convention is
+   `PLAYWRIGHT_MCP_EXTENSION_TOKEN`; OpenMate keeps the same variable
+   name in Milestone 1 to stay drop-in compatible with existing setups):
 
 ```json
 {
   "mcpServers": {
-    "playwright-extension": {
+    "openmate-extension": {
       "command": "npx",
-      "args": [
-        "@playwright/mcp@latest",
-        "--extension"
-      ],
+      "args": ["<openmate-mcp-server-package>", "--extension"],
       "env": {
         "PLAYWRIGHT_MCP_EXTENSION_TOKEN": "your-token-here"
       }
@@ -65,6 +81,29 @@ By default, you'll need to approve each connection when the MCP server tries to 
 }
 ```
 
-This token is unique to your browser profile and provides secure authentication between the MCP server and the extension. Once configured, you won't need to manually approve connections each time.
+The token is unique to your browser profile. Treat it like a password.
 
+## Scope for Milestone 1
 
+This version of the OpenMate Extension is intentionally branding-only on
+top of its upstream bridge. Connection, permissions, and the underlying
+CDP relay behavior are unchanged. Popup shell UI (Geist typography, the
+OpenMate dashboard affordances, and the Overlay HUD) ships in a later
+milestone — see
+[`specs/001-milestone-1-completion/spec.md`](../../../specs/001-milestone-1-completion/spec.md)
+and
+[`documents/Openmate_m1_execution_plan.md`](../../../documents/Openmate_m1_execution_plan.md)
+in the OpenMate monorepo for the full roadmap.
+
+---
+
+## NOTICE
+
+This extension is derived from `microsoft/playwright-mcp`
+(the `packages/extension` workspace), which is distributed under the
+Apache License, Version 2.0. OpenMate's modifications — metadata, brand
+text, icons, popup titles, and an additive CSS token layer — are also
+licensed under Apache-2.0. See `LICENSE` at the repository root for the
+full license text, and upstream
+<https://github.com/microsoft/playwright-mcp> for the original source and
+copyright notices.
