@@ -1,20 +1,20 @@
 {
-  "name": "@playwright/mcp",
+  "name": "@openmate/playwright-mcp",
   "version": "0.0.70",
-  "description": "Playwright Tools for MCP",
+  "description": "OpenMate MCP server — forked from @playwright/mcp with OpenMate auth middleware and stub agent tools (M1-B).",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/microsoft/playwright-mcp.git"
+    "url": "git+https://github.com/dophlin/playwright-mcp.git"
   },
-  "homepage": "https://playwright.dev",
+  "homepage": "https://github.com/dophlin/playwright-mcp",
   "engines": {
     "node": ">=18"
   },
   "author": {
-    "name": "Microsoft Corporation"
+    "name": "OpenMate"
   },
   "license": "Apache-2.0",
-  "mcpName": "io.github.microsoft/playwright-mcp",
+  "mcpName": "io.github.dophlin/openmate-mcp",
   "scripts": {
     "lint": "node update-readme.js",
     "test": "playwright test",
@@ -23,6 +23,7 @@
     "wtest": "playwright test --project=webkit",
     "dtest": "MCP_IN_DOCKER=1 playwright test --project=chromium-docker",
     "build": "echo OK",
+    "start": "node openmate/cli.js",
     "npm-publish": "npm run lint && npm run test && npm publish"
   },
   "exports": {
@@ -33,10 +34,12 @@
     }
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "playwright": "1.60.0-alpha-1776382637000",
     "playwright-core": "1.60.0-alpha-1776382637000"
   },
   "bin": {
+    "openmate-mcp": "openmate/cli.js",
     "playwright-mcp": "cli.js"
   }
 }
