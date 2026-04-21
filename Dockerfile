@@ -52,8 +52,11 @@ RUN npx -y playwright-core install --no-shell chromium
 FROM base
 
 ARG PLAYWRIGHT_BROWSERS_PATH
+ARG GIT_COMMIT_SHA=unknown
 ARG USERNAME=node
 ENV NODE_ENV=production
+ENV GIT_COMMIT_SHA=${GIT_COMMIT_SHA}
+LABEL org.opencontainers.image.revision="${GIT_COMMIT_SHA}"
 
 # Set the correct ownership for the runtime user on production `node_modules`
 RUN chown -R ${USERNAME}:${USERNAME} node_modules

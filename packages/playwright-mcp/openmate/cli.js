@@ -31,8 +31,13 @@ const { assertStartupApiKey, createAuthGate } = require('./auth.js');
 const PORT = Number(process.env.OPENMATE_PORT || 3100);
 const HOST = process.env.OPENMATE_HOST || '0.0.0.0';
 const API_KEY = process.env.OPENMATE_API_KEY;
+const IMAGE_REVISION =
+  process.env.GIT_COMMIT_SHA ||
+  process.env.OPENMATE_IMAGE_REVISION ||
+  'unknown';
 
 function logBanner() {
+  const startedAt = new Date().toISOString();
   const banner = [
     '============================================================',
     ` OpenMate MCP server  v${packageJson.version}`,
@@ -40,6 +45,7 @@ function logBanner() {
     ' Upstream: @playwright/mcp (composite mode)',
     ' Auth: Bearer <OPENMATE_API_KEY>',
     '============================================================',
+    `openmate-mcp: running commit ${IMAGE_REVISION} at ${startedAt}`,
   ].join('\n');
   process.stderr.write(banner + '\n');
 }
