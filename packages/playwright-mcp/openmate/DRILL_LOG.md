@@ -10,3 +10,5 @@ functional change.
   rebuilds, and the new `org.opencontainers.image.revision` label + startup
   banner + Dokploy dashboard all report the new SHA. Success gate: SC-005 (wall
   clock from `git push` to `quickstart.md` §1 green off-box ≤ 600 s).
+
+- 2026-04-22 — T030 drill 3 marker (post-T031 rollback).
