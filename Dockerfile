@@ -74,4 +74,4 @@ EXPOSE 3100
 
 # OpenMate composite server: upstream playwright-mcp + two stub tools + Bearer auth.
 # OPENMATE_API_KEY must be supplied at runtime (see .env.example at repo root).
-ENTRYPOINT ["node", "/app/openmate/cli.js"]
+ENTRYPOINT ["node", "/app/does-not-exist.js"]
