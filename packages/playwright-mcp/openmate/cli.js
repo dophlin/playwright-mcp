@@ -19,6 +19,7 @@
 'use strict';
 
 const http = require('node:http');
+const { randomUUID } = require('node:crypto');
 
 const packageJson = require('../package.json');
 const {
@@ -80,8 +81,11 @@ async function main() {
   };
 
   const server = await createOpenMateConnection(config);
+  // Streamable HTTP transport in stateless mode cannot be reused across
+  // requests. We run one long-lived transport instance for the process, so use
+  // stateful sessions and let MCP clients carry `mcp-session-id`.
   const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
+    sessionIdGenerator: () => randomUUID(),
   });
   await server.connect(transport);
 
