@@ -1,0 +1,16 @@
+Load this extension in Chrome
+==============================
+
+1. From this directory (playwright-mcp/packages/extension), run:
+     npm run build
+
+2. In Chrome: chrome://extensions → Developer mode → Load unpacked
+
+3. Select the FOLDER:
+     .../playwright-mcp/packages/extension/dist
+
+   Do NOT select "extension" (the parent folder). The built manifest, service
+   worker (lib/background.mjs), HTML, and icons live under dist/.
+
+If you see "Could not load background script" or "Could not load manifest",
+you pointed Chrome at the wrong directory or the build did not run yet.

@@ -5,4 +5,5 @@ playwright-report/
 .idea
 .DS_Store
 .env
+.env.local
 sessions/
