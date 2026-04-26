@@ -11,6 +11,7 @@ import { assertValidM2cPayload } from "./payloadSchema";
 import { buildM2CPayload, buildEventsUploadBody } from "./payloadBuilder";
 import { sha256HexOfJson, sha256HexOfBytes, findSlot } from "./uploadManifest";
 import { isAllowedDashboardPageUrl, getDefaultApiBaseUrl } from "./env";
+import { sendRecorderAndHudToTab } from "./contentScriptBridge";
 import { resolveApiBaseUrl, resolveDashboardOrigins } from "./openMateSettings";
 import { err, ok, type OpenMateRequest, type OpenMateResponse } from "./messages";
 import { isSupportedPageUrl } from "./pageSupport";
@@ -249,17 +250,21 @@ async function startSessionAfterStartOk(
   if (evSlot) {
     state.recording.eventsJsonUploadSlot = { objectKey: evSlot.objectKey, uploadUrl: evSlot.uploadUrl };
   }
-  void chrome.tabs
-      .sendMessage(activeTabId, {
-    type: "openmate.recorder.activate",
-    clientRecordingId,
-    startWallMs: state.startWallMs,
-    voicePreference: voicePref,
-  })
-      .catch(() => {});
-  void chrome.tabs
-      .sendMessage(activeTabId, { type: "openmate.hud.show", clientRecordingId })
-      .catch(() => {});
+  const post = await sendRecorderAndHudToTab(
+      activeTabId,
+      {
+        type: "openmate.recorder.activate",
+        clientRecordingId,
+        startWallMs: state.startWallMs,
+        voicePreference: voicePref,
+      },
+      { type: "openmate.hud.show", clientRecordingId },
+  );
+  if (!post.ok) {
+    state.recording = null;
+    state.coord.stop();
+    return err("RECORDER_INJECTION_FAILED", post.message);
+  }
   return ok({
     clientRecordingId,
     status: "active",

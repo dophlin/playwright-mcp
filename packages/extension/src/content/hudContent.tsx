@@ -1,26 +1,28 @@
-import React, { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
-import "./hud.css";
+import React, { useState } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import hudSurfaceCss from "./hud.css?raw";
 
-let root: ReturnType<typeof createRoot> | null = null;
-let clientRecordingId: string | null = null;
+const STYLE_ID = "om-hud-injected-style";
+const HOST_ID = "om-hud-host";
 
-const Hud: React.FC = () => {
+let root: Root | null = null;
+
+function injectHudStyles(): void {
+  if (document.getElementById(STYLE_ID)) {
+    return;
+  }
+  const el = document.createElement("style");
+  el.id = STYLE_ID;
+  el.textContent = hudSurfaceCss;
+  (document.head || document.documentElement).appendChild(el);
+}
+
+type HudProps = { recordingId: string };
+
+const Hud: React.FC<HudProps> = ({ recordingId }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [note, setNote] = useState("");
 
-  useEffect(() => {
-    const t = setInterval(() => {
-      if (!clientRecordingId) {
-        return;
-      }
-    }, 5000);
-    return () => clearInterval(t);
-  }, []);
-
-  if (!clientRecordingId) {
-    return null;
-  }
   return (
     <div
       className={`om-hud-surface ${collapsed ? "is-collapsed" : ""}`}
@@ -29,14 +31,28 @@ const Hud: React.FC = () => {
     >
       <div className="om-hud__head">
         <span className="om-hud__title">Recording</span>
-        <button
-          type="button"
-          className="om-hud__icon"
-          aria-expanded={!collapsed}
-          onClick={() => setCollapsed(c => !c)}
-        >
-          {collapsed ? "Open" : "Minimize"}
-        </button>
+        <div className="om-hud__head-actions">
+          <button
+            type="button"
+            className="om-hud__icon om-hud__icon--danger"
+            onClick={() => {
+              void chrome.runtime.sendMessage({
+                type: "openmate.recording.stopForReview",
+                clientRecordingId: recordingId,
+              });
+            }}
+          >
+            Stop
+          </button>
+          <button
+            type="button"
+            className="om-hud__icon"
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed(c => !c)}
+          >
+            {collapsed ? "Open" : "Minimize"}
+          </button>
+        </div>
       </div>
       {!collapsed && (
         <div className="om-hud__body">
@@ -52,7 +68,7 @@ const Hud: React.FC = () => {
                 }
                 void chrome.runtime.sendMessage({
                   type: "openmate.recording.attachNote",
-                  clientRecordingId: clientRecordingId!,
+                  clientRecordingId: recordingId,
                   text: note,
                   tabId: 0,
                   timestampMs: Date.now(),
@@ -66,7 +82,7 @@ const Hud: React.FC = () => {
             onClick={() => {
               void chrome.runtime.sendMessage({
                 type: "openmate.recording.takeScreenshot",
-                clientRecordingId: clientRecordingId!,
+                clientRecordingId: recordingId,
                 tabId: 0,
                 timestampMs: Date.now(),
               });
@@ -80,27 +96,39 @@ const Hud: React.FC = () => {
   );
 };
 
-function ensureMounted() {
-  if (root) {
-    return;
+function getOrCreateHost(): HTMLElement {
+  const existing = document.getElementById(HOST_ID);
+  if (existing) {
+    return existing;
   }
   const host = document.createElement("div");
-  host.id = "om-hud-host";
-  document.documentElement.appendChild(host);
-  root = createRoot(host);
+  host.id = HOST_ID;
+  (document.body ?? document.documentElement).appendChild(host);
+  return host;
+}
+
+function showHudOverlay(recordingId: string) {
+  injectHudStyles();
+  const host = getOrCreateHost();
+  if (!root) {
+    root = createRoot(host);
+  }
   root.render(
     <React.StrictMode>
-      <Hud />
+      <Hud key={recordingId} recordingId={recordingId} />
     </React.StrictMode>,
   );
 }
 
-chrome.runtime.onMessage.addListener((
-  msg: { type?: string; clientRecordingId?: string },
-) => {
-  if (msg?.type === "openmate.hud.show" && msg.clientRecordingId) {
-    clientRecordingId = msg.clientRecordingId;
-    ensureMounted();
-  }
-  return false;
-});
+const g = globalThis as unknown as { __omHudMessageBound?: true };
+if (!g.__omHudMessageBound) {
+  g.__omHudMessageBound = true;
+  chrome.runtime.onMessage.addListener((
+    msg: { type?: string; clientRecordingId?: string },
+  ) => {
+    if (msg?.type === "openmate.hud.show" && msg.clientRecordingId) {
+      showHudOverlay(msg.clientRecordingId);
+    }
+    return false;
+  });
+}

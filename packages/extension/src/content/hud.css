@@ -21,8 +21,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 8px 10px;
   border-bottom: 1px solid #2b2b2b;
+}
+.om-hud__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.om-hud__icon--danger {
+  border-color: #7f1d1d;
+  color: #fecaca;
 }
 .om-hud__body {
   padding: 8px 10px 10px;

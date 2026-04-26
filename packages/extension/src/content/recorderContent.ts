@@ -140,25 +140,31 @@ function stop() {
   document.removeEventListener("input", onInput, true);
 }
 
-chrome.runtime.onMessage.addListener((
-  msg: { type?: string; clientRecordingId?: string; startWallMs?: number },
-  _s,
-  sendResponse: (r: boolean) => void,
-) => {
-  if (msg?.type === "openmate.recorder.activate" && msg.clientRecordingId && msg.startWallMs) {
-    stop();
-    activeId = msg.clientRecordingId;
-    startWall = msg.startWallMs;
-    start();
-    sendResponse(true);
-    return true;
+{
+  const bound = globalThis as unknown as { __omRecorderMessageBound?: true };
+  if (!bound.__omRecorderMessageBound) {
+    bound.__omRecorderMessageBound = true;
+    chrome.runtime.onMessage.addListener((
+      msg: { type?: string; clientRecordingId?: string; startWallMs?: number },
+      _s,
+      sendResponse: (r: boolean) => void,
+    ) => {
+      if (msg?.type === "openmate.recorder.activate" && msg.clientRecordingId && msg.startWallMs) {
+        stop();
+        activeId = msg.clientRecordingId;
+        startWall = msg.startWallMs;
+        start();
+        sendResponse(true);
+        return true;
+      }
+      if (msg?.type === "openmate.recorder.refresh" && msg.clientRecordingId && msg.startWallMs) {
+        if (msg.clientRecordingId === activeId) {
+          startWall = msg.startWallMs;
+        }
+        sendResponse(true);
+        return true;
+      }
+      return false;
+    });
   }
-  if (msg?.type === "openmate.recorder.refresh" && msg.clientRecordingId && msg.startWallMs) {
-    if (msg.clientRecordingId === activeId) {
-      startWall = msg.startWallMs;
-    }
-    sendResponse(true);
-    return true;
-  }
-  return false;
-});
+}
