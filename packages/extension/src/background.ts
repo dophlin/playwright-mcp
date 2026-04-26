@@ -17,6 +17,7 @@
 import { RelayConnection, debugLog } from './relayConnection';
 import { handleOpenMateMessage } from './recorder/openMateHandlers';
 import { isOpenMateRequest } from './recorder/messages';
+import { registerPanelPortListeners } from './recorder/panelPort';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -199,7 +200,7 @@ class TabShareExtension {
 
     if (!this._activeConnection || changeInfo.groupId === undefined)
       return;
-    // Ignore the extension's own UI tabs (connect/status pages) — those get added
+    // Ignore the extension's own UI tabs (connect/panel pages) — those get added
     // to the group for visual grouping, not because they should be controlled.
     if (tab.url?.startsWith(chrome.runtime.getURL('')))
       return;
@@ -243,3 +244,8 @@ class TabShareExtension {
 }
 
 new TabShareExtension();
+
+registerPanelPortListeners();
+if (chrome.sidePanel?.setPanelBehavior) {
+  void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+}

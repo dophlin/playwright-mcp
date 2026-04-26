@@ -134,6 +134,8 @@ export type OpenMateRecordingSessionState = {
   startingUrl?: string;
   startingTabTitle?: string;
   activeTabId?: number;
+  /** Voice / recorder preference from the session start request; reused when activating the recorder on tab switches. */
+  voicePreference: "prompt" | "on" | "off";
   visitedDomains: string[];
   stepCount: number;
   voiceStatus: VoiceStatus;

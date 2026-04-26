@@ -3,15 +3,14 @@
  * are not in the page yet — `tabs.sendMessage` fails. Inject the bundles once,
  * then resend. Idempotent: content entry points guard against double listeners.
  */
-const RECORDING_BUNDLES = ["lib/content/recorderContent.mjs", "lib/content/hudContent.mjs"] as const;
+const RECORDING_BUNDLE = "lib/content/recorderContent.mjs" as const;
 
-type ActivateMsg = {
+export type ActivateRecorderMessage = {
   type: "openmate.recorder.activate";
   clientRecordingId: string;
   startWallMs: number;
   voicePreference: "prompt" | "on" | "off";
 };
-type HudMsg = { type: "openmate.hud.show"; clientRecordingId: string };
 
 export type RecordingContentPostResult = { ok: true } | { ok: false; message: string };
 
@@ -27,7 +26,7 @@ async function sendWithOptionalInject(
       try {
         await chrome.scripting.executeScript({
           target: { tabId, allFrames: false },
-          files: [...RECORDING_BUNDLES],
+          files: [RECORDING_BUNDLE],
         });
         injected.v = true;
       } catch {
@@ -42,15 +41,13 @@ async function sendWithOptionalInject(
   }
 }
 
-export async function sendRecorderAndHudToTab(
+export async function sendRecorderActivateToTab(
   tabId: number,
-  activate: ActivateMsg,
-  hud: HudMsg,
+  activate: ActivateRecorderMessage,
 ): Promise<RecordingContentPostResult> {
   const injected = { v: false };
   try {
     await sendWithOptionalInject(tabId, activate, injected);
-    await sendWithOptionalInject(tabId, hud, injected);
   } catch (e) {
     const m = e instanceof Error && e.message === "inject"
       ? "Could not load recording scripts on this page. Use an https:// page, refresh it, and try again."

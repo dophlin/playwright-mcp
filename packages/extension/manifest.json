@@ -9,7 +9,8 @@
     "tabs",
     "tabGroups",
     "storage",
-    "scripting"
+    "scripting",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -18,16 +19,13 @@
     "service_worker": "lib/background.mjs",
     "type": "module"
   },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["lib/content/recorderContent.mjs"],
-      "run_at": "document_idle",
-      "all_frames": false
-    },
-    {
-      "matches": ["<all_urls>"],
-      "js": ["lib/content/hudContent.mjs"],
       "run_at": "document_idle",
       "all_frames": false
     },
@@ -46,7 +44,6 @@
   ],
   "action": {
     "default_title": "OpenMate Extension",
-    "default_popup": "status.html",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

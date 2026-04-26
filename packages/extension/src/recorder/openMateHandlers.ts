@@ -11,7 +11,10 @@ import { assertValidM2cPayload } from "./payloadSchema";
 import { buildM2CPayload, buildEventsUploadBody } from "./payloadBuilder";
 import { sha256HexOfJson, sha256HexOfBytes, findSlot } from "./uploadManifest";
 import { isAllowedDashboardPageUrl, getDefaultApiBaseUrl } from "./env";
-import { sendRecorderAndHudToTab } from "./contentScriptBridge";
+import { sendRecorderActivateToTab } from "./contentScriptBridge";
+import { formatRecordingEvent, formatNoteActivity, formatScreenshotActivity, mergeActivityLog } from "./activityFormat";
+import { broadcastActivityRow, broadcastPanelPoke } from "./panelPort";
+import { shouldBroadcastInputActivity, resetInputActivityThrottle } from "./inputActivityThrottle";
 import { resolveApiBaseUrl, resolveDashboardOrigins } from "./openMateSettings";
 import { err, ok, type OpenMateRequest, type OpenMateResponse } from "./messages";
 import { isSupportedPageUrl } from "./pageSupport";
@@ -148,6 +151,13 @@ function ensureOpenMateTabHooks() {
       const e = state.coord.appendTabLifecycleEvent("tab_switch", tabId, rel);
       state.recording.events.push(e);
       state.recording.stepCount = state.recording.events.length;
+      broadcastActivityRow(formatRecordingEvent(e));
+      void sendRecorderActivateToTab(tabId, {
+        type: "openmate.recorder.activate",
+        clientRecordingId: state.recording.clientRecordingId,
+        startWallMs: state.startWallMs,
+        voicePreference: state.recording.voicePreference,
+      }).catch(() => {});
     } else {
       const rpe: OpenMateRecordingEvent = {
         eventId: randomId(),
@@ -159,14 +169,8 @@ function ensureOpenMateTabHooks() {
       };
       state.recording.events.push(rpe);
       state.recording.stepCount = state.recording.events.length;
+      broadcastActivityRow(formatRecordingEvent(rpe));
     }
-    void chrome.tabs
-        .sendMessage(tabId, {
-      type: "openmate.recorder.refresh",
-      clientRecordingId: state.recording.clientRecordingId,
-      startWallMs: state.startWallMs,
-    })
-        .catch(() => {});
   });
 
   chrome.tabs.onRemoved.addListener(tabId => {
@@ -176,6 +180,7 @@ function ensureOpenMateTabHooks() {
     const e = state.coord.appendTabLifecycleEvent("tab_close", tabId, rel);
     state.recording.events.push(e);
     state.recording.stepCount = state.recording.events.length;
+    broadcastActivityRow(formatRecordingEvent(e));
   });
 }
 
@@ -199,6 +204,7 @@ function newRecordingState(
   title: string | undefined,
   activeTabId: number,
   voice: VoiceStatus,
+  voicePreference: "prompt" | "on" | "off",
   uploadSlots: UploadSlot[],
 ): OpenMateRecordingSessionState {
   return {
@@ -211,6 +217,7 @@ function newRecordingState(
     startingUrl: url,
     startingTabTitle: title,
     activeTabId,
+    voicePreference,
     visitedDomains: (() => {
       try {
         return [new URL(url).hostname];
@@ -244,22 +251,19 @@ async function startSessionAfterStartOk(
   state.coord = new RecordingSessionCoordinator();
   state.startWallMs = Date.now();
   state.coord.start(clientRecordingId, activeTabId, voice, pageUrl);
-  state.recording = newRecordingState(data, clientRecordingId, pageUrl, pageTitle, activeTabId, voice, data.uploadSlots);
+  resetInputActivityThrottle();
+  state.recording = newRecordingState(data, clientRecordingId, pageUrl, pageTitle, activeTabId, voice, voicePref, data.uploadSlots);
   ensureOpenMateTabHooks();
   const evSlot = findSlot(data.uploadSlots, "events");
   if (evSlot) {
     state.recording.eventsJsonUploadSlot = { objectKey: evSlot.objectKey, uploadUrl: evSlot.uploadUrl };
   }
-  const post = await sendRecorderAndHudToTab(
-      activeTabId,
-      {
-        type: "openmate.recorder.activate",
-        clientRecordingId,
-        startWallMs: state.startWallMs,
-        voicePreference: voicePref,
-      },
-      { type: "openmate.hud.show", clientRecordingId },
-  );
+  const post = await sendRecorderActivateToTab(activeTabId, {
+    type: "openmate.recorder.activate",
+    clientRecordingId,
+    startWallMs: state.startWallMs,
+    voicePreference: voicePref,
+  });
   if (!post.ok) {
     state.recording = null;
     state.coord.stop();
@@ -321,14 +325,22 @@ export async function handleOpenMateMessage(
     }
     case "openmate.auth.getStatus": {
       const rec = state.recording;
-      const recording =
-        rec && (rec.status === "active" || rec.status === "starting")
-          ? { status: rec.status, stepCount: rec.stepCount }
-          : undefined;
+      const recording = rec
+        ? {
+            status: rec.status,
+            stepCount: rec.stepCount,
+            clientRecordingId: rec.clientRecordingId,
+            activeTabId: rec.activeTabId,
+            pendingFormDefaults: rec.pendingFormDefaults,
+            stopSummary: rec.stopSummary,
+          }
+        : undefined;
+      const activityLog = rec ? mergeActivityLog(rec, state.startWallMs) : undefined;
       return ok({
         status: state.status,
         user: state.user ?? undefined,
         recording,
+        activityLog,
       });
     }
     case "openmate.auth.refresh": {
@@ -434,6 +446,8 @@ export async function handleOpenMateMessage(
       const e2: OpenMateRecordingEvent = { ...ev, timestampMs: tOff };
       state.recording.events.push(e2);
       state.recording.stepCount = state.recording.events.length;
+      if (e2.actionType !== "input" || shouldBroadcastInputActivity())
+        broadcastActivityRow(formatRecordingEvent(e2));
       if (e2.url) {
         try {
           const h = new URL(e2.url).hostname;
@@ -454,7 +468,9 @@ export async function handleOpenMateMessage(
       if (state.recording.status !== "active") {
         return err("RECORDING_NOT_ACTIVE", "Recording is not active");
       }
-      const noteTab = request.tabId > 0 ? request.tabId : (sender.tab?.id ?? 0);
+      const noteTab = request.tabId > 0
+        ? request.tabId
+        : (sender.tab?.id ?? state.recording.activeTabId ?? 0);
       if (!noteTab) {
         return err("RECORDING_NOT_ACTIVE", "Missing tab for note");
       }
@@ -467,6 +483,7 @@ export async function handleOpenMateMessage(
       const note: TypedNoteRecord = { noteId: nid, text: t, tabId: noteTab, timestampMs: request.timestampMs, nearestEventId: nearest };
       state.recording.typedNotes.push(note);
       state.recording.typedNoteCount = state.recording.typedNotes.length;
+      broadcastActivityRow(formatNoteActivity(note, state.startWallMs));
       return ok({ noteId: nid, nearestEventId: nearest ?? "" });
     }
     case "openmate.recording.takeScreenshot": {
@@ -476,7 +493,9 @@ export async function handleOpenMateMessage(
       if (state.recording.status !== "active") {
         return err("RECORDING_NOT_ACTIVE", "Recording is not active");
       }
-      const capTab = request.tabId > 0 ? request.tabId : (sender.tab?.id ?? 0);
+      const capTab = request.tabId > 0
+        ? request.tabId
+        : (sender.tab?.id ?? state.recording.activeTabId ?? 0);
       if (!capTab) {
         return err("SCREENSHOT_BLOCKED", "Missing tab for screenshot");
       }
@@ -495,8 +514,10 @@ export async function handleOpenMateMessage(
       const blob = await dataUrlToBlob(cap);
       const ab = await blob.arrayBuffer();
       const sid = newScreenshotId();
-      state.recording.screenshots.push({ screenshotId: sid, tabId: capTab, timestampMs: request.timestampMs, png: ab });
+      const shot = { screenshotId: sid, tabId: capTab, timestampMs: request.timestampMs, png: ab };
+      state.recording.screenshots.push(shot);
       state.recording.screenshotCount = state.recording.screenshots.length;
+      broadcastActivityRow(formatScreenshotActivity(shot, state.startWallMs));
       return ok({
         screenshotId: sid,
         sequenceNumber: state.recording.screenshots.length,
@@ -513,6 +534,7 @@ export async function handleOpenMateMessage(
       const now = new Date().toISOString();
       state.recording = applyStopForReview(state.recording, state.recording.voiceStatus, now);
       state.coord.stop();
+      broadcastPanelPoke();
       return ok({
         status: "stoppedPendingForm",
         defaults: state.recording.pendingFormDefaults,
@@ -557,12 +579,15 @@ export async function handleOpenMateMessage(
         state.recording = null;
         state.coord.stop();
         lastSubmitMetadata = null;
+        resetInputActivityThrottle();
         await clearPendingUpload(rid);
+        broadcastPanelPoke();
         return ok({ status: "discarded" });
       }
       if (request.confirmed) {
         await clearPendingUpload(request.clientRecordingId);
         lastSubmitMetadata = null;
+        broadcastPanelPoke();
         return ok({ status: "discarded" });
       }
       return err("CONFIRMATION_REQUIRED", "Set confirmed to discard pending data");
@@ -606,6 +631,7 @@ async function runUploadAndComplete(
 
   if (!isRetry) {
     state.recording.status = "uploading";
+    broadcastPanelPoke();
   }
 
   let uploadSlots: UploadSlot[] = state.recording.sessionUploadSlots;
@@ -625,6 +651,7 @@ async function runUploadAndComplete(
           updatedAt: new Date().toISOString(),
         });
       }
+      broadcastPanelPoke();
       return err("UPLOAD_FAILED", re.error.message);
     }
     uploadSlots = mergeReissuedSlots(state.recording.sessionUploadSlots, re.data.uploadSlots);
@@ -637,6 +664,7 @@ async function runUploadAndComplete(
   const eventsSlot = findSlot(uploadSlots, "events") ?? uploadSlots.find(s => s.objectKey.endsWith("events.json"));
   if (!eventsSlot) {
     state.recording.status = "uploadFailed";
+    broadcastPanelPoke();
     return err("UPLOAD_FAILED", "Backend did not return an events upload target");
   }
   const okE = await putBytes(eventsSlot.uploadUrl, new TextEncoder().encode(eventsText).buffer, "application/json");
@@ -650,14 +678,17 @@ async function runUploadAndComplete(
         const r2 = await putBytes(slot2.uploadUrl, new TextEncoder().encode(eventsText).buffer, "application/json");
         if (!r2) {
           state.recording.status = "uploadFailed";
+          broadcastPanelPoke();
           return err("UPLOAD_FAILED", "Could not upload events artifact after reissue");
         }
       } else {
         state.recording.status = "uploadFailed";
+        broadcastPanelPoke();
         return err("UPLOAD_FAILED", "Reissue did not return events target");
       }
     } else {
       state.recording.status = "uploadFailed";
+      broadcastPanelPoke();
       return err("UPLOAD_FAILED", "Could not upload events");
     }
   }
@@ -666,6 +697,7 @@ async function runUploadAndComplete(
   const screenSlot = findSlot(uploadSlots, "screenshot1") ?? uploadSlots.find(s => s.objectKey.includes("screenshot"));
   if (!screenSlot) {
     state.recording.status = "uploadFailed";
+    broadcastPanelPoke();
     return err("UPLOAD_FAILED", "Backend did not return a screenshot upload target");
   }
   const imgHash = await sha256HexOfBytes(png);
@@ -680,13 +712,16 @@ async function runUploadAndComplete(
         const p2 = await putBytes(s2.uploadUrl, png, "image/png");
         if (!p2) {
           state.recording.status = "uploadFailed";
+          broadcastPanelPoke();
           return err("UPLOAD_FAILED", "Screenshot upload failed");
         }
       } else {
+        broadcastPanelPoke();
         return err("UPLOAD_FAILED", "Reissue did not return screenshot target");
       }
     } else {
       state.recording.status = "uploadFailed";
+      broadcastPanelPoke();
       return err("UPLOAD_FAILED", "Screenshot upload failed");
     }
   }
@@ -727,6 +762,7 @@ async function runUploadAndComplete(
         updatedAt: new Date().toISOString(),
       });
     }
+    broadcastPanelPoke();
     return err("UPLOAD_FAILED", comp.error.message);
   }
 
@@ -736,7 +772,9 @@ async function runUploadAndComplete(
   state.recording = null;
   lastSubmitMetadata = null;
   state.coord.stop();
+  resetInputActivityThrottle();
   await clearPendingUpload(rid);
+  broadcastPanelPoke();
 
   return ok({ status: "uploaded", skillId: comp.data.skillId, dashboardUrl });
 }

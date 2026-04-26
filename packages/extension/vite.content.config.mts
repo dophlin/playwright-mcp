@@ -16,7 +16,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         recorderContent: resolve(extRoot, "src/content/recorderContent.ts"),
-        hudContent: resolve(extRoot, "src/content/hudContent.tsx"),
         dashboardHandoff: resolve(extRoot, "src/content/dashboardHandoff.ts"),
       },
       output: {

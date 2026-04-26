@@ -5,7 +5,7 @@
 import { classifyInput, redactValue, type InputContext } from "../recorder/guardrails";
 import type { OpenMateActionType, OpenMateRecordingEvent, SensitivitySnapshot } from "../recorder/types";
 
-const OM_IGNORE = "[data-openmate-ignore-capture], .om-hud-surface, .om-hud-surface *";
+const OM_IGNORE = "[data-openmate-ignore-capture]";
 
 let activeId: string | null = null;
 let startWall = 0;

@@ -284,7 +284,7 @@ test(`bypass connection dialog with token`, async ({ browserWithExtension, start
   const browserContext = await browserWithExtension.launch();
 
   const page = await browserContext.newPage();
-  await page.goto(`chrome-extension://${extensionId}/status.html`);
+  await page.goto(`chrome-extension://${extensionId}/connect.html`);
   const token = await page.locator('.auth-token-code').textContent();
   const [name, value] = token?.split('=') || [];
 
