@@ -315,9 +315,15 @@ export async function handleOpenMateMessage(
       return ok({ status: "connected" });
     }
     case "openmate.auth.getStatus": {
+      const rec = state.recording;
+      const recording =
+        rec && (rec.status === "active" || rec.status === "starting")
+          ? { status: rec.status, stepCount: rec.stepCount }
+          : undefined;
       return ok({
         status: state.status,
         user: state.user ?? undefined,
+        recording,
       });
     }
     case "openmate.auth.refresh": {

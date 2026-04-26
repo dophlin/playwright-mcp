@@ -37,6 +37,7 @@ const DEFAULT_DASHBOARD = defaultDashboardFromEnv();
 type AuthStatusPayload = {
   status: string;
   user?: { id: string; email: string; displayName: string | null };
+  recording?: { status: string; stepCount: number };
 };
 
 async function readDashboardUrl(): Promise<string> {
@@ -77,6 +78,38 @@ const StatusApp: React.FC = () => {
     void chrome.tabs.create({ url: `${base}/connect`, active: true });
   }, [dashboard]);
 
+  const startRecording = useCallback(async () => {
+    setErr(null);
+    try {
+      const last = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+      if (last.id === undefined) {
+        setErr("No browser window");
+        return;
+      }
+      const tabs = await chrome.tabs.query({ active: true, windowId: last.id });
+      const tabId = tabs[0]?.id;
+      if (tabId == null) {
+        setErr("No active tab in that window");
+        return;
+      }
+      const r = await chrome.runtime.sendMessage({
+        type: "openmate.recording.start",
+        activeTabId: tabId,
+        voicePreference: "off",
+      });
+      if (r && "ok" in r && r.ok) {
+        void refresh();
+        return;
+      }
+      const msg = r && "error" in r && r.error && typeof r.error === "object" && "message" in r.error
+        ? String((r.error as { message: string }).message)
+        : "Could not start recording";
+      setErr(msg);
+    } catch {
+      setErr("Could not start recording");
+    }
+  }, [refresh]);
+
   const signOut = useCallback(async () => {
     setErr(null);
     const r = await chrome.runtime.sendMessage({ type: "openmate.auth.signOutLocal" });
@@ -88,13 +121,20 @@ const StatusApp: React.FC = () => {
   }, []);
 
   const status = auth?.status ?? "signedOut";
+  const rec = auth?.recording;
+  const isRecording = rec?.status === "active" || rec?.status === "starting";
   const label = status === "connected" && auth?.user
-    ? `Connected as ${auth.user.email}`
+    ? isRecording
+      ? `Recording — ${rec?.stepCount ?? 0} step(s). Use the floating panel on the page to stop, discard, or submit.`
+      : `Connected as ${auth.user.email}`
     : status === "connecting"
       ? "Connecting…"
       : status === "expired"
         ? "Session expired — reconnect from the dashboard"
         : "Not connected — use Connect to sign in on the OpenMate website";
+
+  const showConnect = status === "signedOut" || status === "expired";
+  const showStartRecording = status === "connected" && !isRecording;
 
   return (
     <main className="om-shell" aria-labelledby="om-shell-title">
@@ -111,9 +151,16 @@ const StatusApp: React.FC = () => {
       )}
 
       <div className="om-shell__row">
-        <button type="button" className="om-shell__primary" onClick={openConnect}>
-          Connect
-        </button>
+        {showConnect && (
+          <button type="button" className="om-shell__primary" onClick={openConnect}>
+            Connect
+          </button>
+        )}
+        {showStartRecording && (
+          <button type="button" className="om-shell__primary" onClick={startRecording}>
+            Start recording
+          </button>
+        )}
         {status === "connected" && (
           <button type="button" className="om-shell__secondary" onClick={signOut}>
             Sign out

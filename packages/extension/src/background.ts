@@ -45,7 +45,6 @@ class TabShareExtension {
     chrome.tabs.onRemoved.addListener(this._onTabRemoved.bind(this));
     chrome.tabs.onUpdated.addListener(this._onTabUpdated.bind(this));
     chrome.runtime.onMessage.addListener(this._onMessage.bind(this));
-    chrome.action.onClicked.addListener(this._onActionClicked.bind(this));
   }
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
@@ -233,13 +232,6 @@ class TabShareExtension {
     } catch (error: any) {
       debugLog('Error adding tab to group:', error);
     }
-  }
-
-  private async _onActionClicked(): Promise<void> {
-    await chrome.tabs.create({
-      url: chrome.runtime.getURL('status.html'),
-      active: true
-    });
   }
 
   private async _disconnect(): Promise<void> {
