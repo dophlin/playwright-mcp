@@ -23,6 +23,7 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 // Set SET_EXTENSION_PUBLIC_KEY_IN_MANIFEST=1 in release builds to inject it into the manifest.
 const extensionPublicKey = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwRsUUO4mmbCi4JpmrIoIw31iVW9+xUJRZ6nSzya17PQkaUPDxe1IpgM+vpd/xB6mJWlJSyE1Lj95c0sbomGfVY1M0zUeKbaRVcAb+/a6m59gNR+ubFlmTX0nK9/8fE2FpRB9D+4N5jyeIPQuASW/0oswI2/ijK7hH5NTRX8gWc/ROMSgUj7rKhTAgBrICt/NsStgDPsxRTPPJnhJ/ViJtM1P5KsSYswE987DPoFnpmkFpq8g1ae0eYbQfXy55ieaacC4QWyJPj3daU2kMfBQw7MXnnk0H/WDxouMOIHnd8MlQxpEMqAihj7KpuONH+MUhuj9HEQo4df6bSaIuQ0b4QIDAQAB';
 
+// M2-C recorder + HUD content bundles are built with `vite.content.config.mts` (see `npm run build`).
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [

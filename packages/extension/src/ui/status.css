@@ -56,6 +56,21 @@ body {
   font-size: 13px;
 }
 
+.om-shell__err {
+  margin: 0;
+  text-align: center;
+  color: #b3261e;
+  font-size: 12px;
+}
+
+.om-shell__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+}
+
 .om-shell__primary {
   appearance: none;
   -webkit-appearance: none;
@@ -86,6 +101,25 @@ body {
   color: #8a8a8a;
   cursor: not-allowed;
   opacity: 1;
+}
+
+.om-shell__secondary {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--openmate-border-light);
+  border-radius: var(--openmate-radius-base);
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  background: var(--openmate-bg-base-light);
+  color: #1f1f1f;
+  cursor: pointer;
+}
+
+.om-shell__secondary:hover {
+  background: #f2f2f2;
 }
 
 .om-shell__footer {

@@ -7,7 +7,9 @@
     "debugger",
     "activeTab",
     "tabs",
-    "tabGroups"
+    "tabGroups",
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -16,6 +18,32 @@
     "service_worker": "lib/background.mjs",
     "type": "module"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/content/recorderContent.mjs"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["lib/content/hudContent.mjs"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/content/dashboardHandoff.mjs"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/content/*.mjs", "icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_title": "OpenMate Extension",
     "default_icon": {

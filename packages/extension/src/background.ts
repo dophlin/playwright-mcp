@@ -15,6 +15,8 @@
  */
 
 import { RelayConnection, debugLog } from './relayConnection';
+import { handleOpenMateMessage } from './recorder/openMateHandlers';
+import { isOpenMateRequest } from './recorder/messages';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -48,6 +50,16 @@ class TabShareExtension {
 
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
   private _onMessage(message: PageMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
+    if (isOpenMateRequest(message)) {
+      void handleOpenMateMessage(message, sender).then(
+        result => sendResponse(result),
+        (e: unknown) => {
+          const msg = e instanceof Error ? e.message : 'OpenMate handler failed';
+          sendResponse({ ok: false, error: { code: 'INTERNAL', message: msg } });
+        },
+      );
+      return true;
+    }
     switch (message.type) {
       case 'connectToMCPRelay':
         this._connectToRelay(sender.tab!.id!, message.mcpRelayUrl, message.protocolVersion).then(
