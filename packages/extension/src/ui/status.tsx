@@ -24,8 +24,15 @@ const versionLabel = manifestVersion && typeof manifestVersion === 'string'
   ? `v${manifestVersion}`
   : 'v?';
 
-/** Default local dashboard; override via `openmate_dashboard_url` in chrome.storage.local if needed. */
-const DEFAULT_DASHBOARD = "http://127.0.0.1:5173";
+/** Default “Connect” target; override with `VITE_OPENMATE_DASHBOARD` at build or `openmate_dashboard_url` in storage. */
+function defaultDashboardFromEnv(): string {
+  const raw = import.meta.env.VITE_OPENMATE_DASHBOARD;
+  if (typeof raw === "string" && raw.trim().length) {
+    return raw.replace(/\/$/, "");
+  }
+  return "https://dash-16-58-144-221.nip.io";
+}
+const DEFAULT_DASHBOARD = defaultDashboardFromEnv();
 
 type AuthStatusPayload = {
   status: string;

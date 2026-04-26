@@ -17,7 +17,10 @@
 import { resolve } from 'path';
 import { defineConfig } from 'vite';
 
+const extRoot = resolve(__dirname);
+
 export default defineConfig({
+  envDir: extRoot,
   build: {
     lib: {
       entry: resolve(__dirname, 'src/background.ts'),

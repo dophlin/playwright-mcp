@@ -92,6 +92,8 @@ class TabShareExtension {
     return false;
   }
 
+  // Playwright MCP must be running and providing this relay URL; otherwise the WebSocket fails with
+  // net::ERR_CONNECTION_REFUSED in the service worker (expected if you are not using MCP right now).
   private async _connectToRelay(selectorTabId: number, mcpRelayUrl: string, protocolVersion: number): Promise<void> {
     try {
       debugLog(`Connecting to relay at ${mcpRelayUrl} (protocol v${protocolVersion})`);

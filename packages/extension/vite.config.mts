@@ -26,6 +26,8 @@ const extensionPublicKey = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwRsUUO4m
 // M2-C recorder + HUD content bundles are built with `vite.content.config.mts` (see `npm run build`).
 // https://vitejs.dev/config/
 export default defineConfig({
+  /** Load `packages/extension/.env*` for `VITE_*` in UI and shared code. */
+  envDir: resolve(__dirname),
   plugins: [
     react(),
     viteStaticCopy({

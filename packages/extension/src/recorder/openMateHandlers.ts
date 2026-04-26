@@ -117,16 +117,9 @@ void (async function restore() {
   }
   state.user = s.user;
   state.status = s.status;
-  if (s.status === "connected") {
-    const b = await ensureApiBase();
-    const okR = await buildCtx(b).onRefreshAccessToken();
-    if (okR) {
-      await hydrateUserFromToken(b);
-      state.status = "connected";
-    } else {
-      state.status = "expired";
-    }
-  }
+  // Do not call the network on service worker start: avoids ERR_CONNECTION / backend-down noise in
+  // chrome://extensions, and the access token is memory-only. First protected call or
+  // openmate.auth.refresh will run refresh; getStatus is safe offline for UI.
 })().catch(() => {
   /* ignore */
 });

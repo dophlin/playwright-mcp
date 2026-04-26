@@ -1,7 +1,8 @@
 /**
  * Build-time and runtime OpenMate service configuration for the extension.
  */
-const DEFAULT_API = "http://127.0.0.1:3000";
+/** Default when no `VITE_OPENMATE_API_BASE` is set at build time and no storage override. */
+const DEFAULT_API = "https://be-16-58-144-221.nip.io";
 
 function readMetaEnvString(key: string): string | undefined {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
@@ -14,7 +15,13 @@ export function getDefaultApiBaseUrl(): string {
 
 export const API_PREFIX = "/v1";
 
-const DEFAULT_DASHBOARDS = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3001"];
+const DEFAULT_DASHBOARDS = [
+  "https://dash-16-58-144-221.nip.io",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+];
 
 function parseOriginList(s: string | undefined): string[] {
   if (!s?.trim())
