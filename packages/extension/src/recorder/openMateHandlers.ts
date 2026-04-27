@@ -4,26 +4,34 @@ import * as recClient from "../api/recordingClient";
 import type { StartSessionResponse } from "../api/recordingClient";
 import { clearPendingUpload, getPendingUpload, mergeReissuedSlots, savePendingUpload } from "../storage/pendingUploadStore";
 import { clearSession, persistSession, readRefreshToken, readStoredSession } from "../storage/extensionSessionStore";
-import { nearestEventId, createNoteId } from "./contextAttachments";
-import { applyStopForReview } from "./finalizeRecording";
-import { normalizeRawRecorderEvent, type RawRecorderEvent } from "./eventNormalizer";
-import { assertValidM2cPayload } from "./payloadSchema";
-import { buildM2CPayload, buildEventsUploadBody } from "./payloadBuilder";
-import { sha256HexOfJson, sha256HexOfBytes, findSlot } from "./uploadManifest";
-import { isAllowedDashboardPageUrl, getDefaultApiBaseUrl } from "./env";
+import { findSlot, sha256HexOfBytes } from "./uploadManifest";
+import { isAllowedDashboardPageUrl } from "./env";
 import { sendRecorderActivateToTab } from "./contentScriptBridge";
-import { formatRecordingEvent, formatNoteActivity, formatScreenshotActivity, mergeActivityLog } from "./activityFormat";
-import { broadcastActivityRow, broadcastPanelPoke } from "./panelPort";
-import { shouldBroadcastInputActivity, resetInputActivityThrottle } from "./inputActivityThrottle";
+import { broadcastPanelPoke } from "./panelPort";
 import { resolveApiBaseUrl, resolveDashboardOrigins } from "./openMateSettings";
 import { err, ok, type OpenMateRequest, type OpenMateResponse } from "./messages";
-import { isSupportedPageUrl } from "./pageSupport";
-import { newScreenshotId, assertScreenshotNotBlockedForUrl, dataUrlToBlob } from "./screenshotCapture";
+import { isSupportedPageUrl } from "./pageSupportAdapter";
+import { assertScreenshotNotBlockedForUrl, dataUrlToBlob } from "./screenshotCapture";
 import { initialVoiceState } from "./voiceCapture";
-import { RecordingSessionCoordinator } from "./sessionCoordinator";
-import { updateGuardSummary } from "./guardrails";
-import type { ExtensionUser, OpenMateRecordingEvent, OpenMateRecordingSessionState, SkillMetadataDraft, TypedNoteRecord, UploadSlot, VoiceStatus } from "./types";
-import { randomId } from "./ids";
+import { captureDomEventFromExtension } from "./domSignalAdapter";
+import { attachScreenshotBytes, attachUserNote } from "./attachmentAdapter";
+import {
+  clearActivityFeed,
+  formatOpenMateEventSummary,
+  getActivityFeed,
+  pushActivitySummary,
+  setRecordingStartWall
+} from "./activityFeed";
+import {
+  discardRecording,
+  getRecorderSnapshot,
+  getRecorderStatus,
+  startRecording,
+  stopRecording,
+  takeStaleSessionError
+} from "./recorderHost";
+import type { ExtensionUser, OpenMateRecordingEvent, SkillMetadataDraft, UploadSlot, VoiceStatus } from "./types";
+import type { RecordingLifecycleStatus } from "./types";
 
 const RECORDER_VERSION_PREFIX = "extension-";
 const MIN_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X9Yk0AAAAASUVORK5CYII=";
@@ -36,14 +44,31 @@ function minPngBuffer(): ArrayBuffer {
   return u.buffer;
 }
 
+type SessionCtx = {
+  clientRecordingId: string;
+  backendSessionId?: string;
+  skillId?: string;
+  recordingConfigurationVersion?: string;
+  status: RecordingLifecycleStatus;
+  startedAt: string;
+  activeTabId?: number;
+  voicePreference: "prompt" | "on" | "off";
+  sessionUploadSlots: UploadSlot[];
+  voiceStatus: VoiceStatus;
+  voiceDurationMs: number;
+  lastScreenshotPng?: ArrayBuffer;
+  pendingFormDefaults?: { title: string; allowedDomains: string[]; tags: string[] };
+  stopSummary?: { stepCount: number; voiceDurationMs: number; typedNoteCount: number; screenshotCount: number };
+};
+
 type AppState = {
   accessToken: string | null;
   user: ExtensionUser | null;
   status: "signedOut" | "connecting" | "connected" | "expired";
-  recording: OpenMateRecordingSessionState | null;
+  recording: SessionCtx | null;
+  /** Package output for upload; kept after `stop` until `submit` / `discard`. */
+  lastRecorderOutput: import("@openmate/extension-recorder").RecorderOutput | null;
   startWallMs: number;
-  coord: RecordingSessionCoordinator;
-  tabHooks: boolean;
 };
 
 const state: AppState = {
@@ -51,19 +76,17 @@ const state: AppState = {
   user: null,
   status: "signedOut",
   recording: null,
-  startWallMs: 0,
-  coord: new RecordingSessionCoordinator(),
-  tabHooks: false,
+  lastRecorderOutput: null,
+  startWallMs: 0
 };
 
-/** Last form values for upload retry after a failure. */
 let lastSubmitMetadata: SkillMetadataDraft | null = null;
-
 let cachedBase: string | null = null;
 
 async function ensureApiBase(): Promise<string> {
-  if (cachedBase)
+  if (cachedBase) {
     return cachedBase;
+  }
   cachedBase = await resolveApiBaseUrl();
   return cachedBase;
 }
@@ -81,7 +104,10 @@ function buildCtx(base: string): FetchJsonContext {
         return false;
       }
       const b = await ensureApiBase();
-      const r = await authClient.refreshSession({ baseUrl: b, getAccessToken: () => state.accessToken, onRefreshAccessToken: async () => false }, rt);
+      const r = await authClient.refreshSession(
+        { baseUrl: b, getAccessToken: () => state.accessToken, onRefreshAccessToken: async () => false },
+        rt
+      );
       if (!r.ok) {
         if (r.error.status === 401) {
           await clearSession();
@@ -98,7 +124,7 @@ function buildCtx(base: string): FetchJsonContext {
         return true;
       }
       return false;
-    },
+    }
   };
 }
 
@@ -108,7 +134,7 @@ async function hydrateUserFromToken(base: string): Promise<void> {
     state.user = {
       id: u.data.id,
       email: u.data.email,
-      displayName: u.data.displayName,
+      displayName: u.data.displayName
     };
   }
 }
@@ -121,73 +147,9 @@ void (async function restore() {
   }
   state.user = s.user;
   state.status = s.status;
-  // Do not call the network on service worker start: avoids ERR_CONNECTION / backend-down noise in
-  // chrome://extensions, and the access token is memory-only. First protected call or
-  // openmate.auth.refresh will run refresh; getStatus is safe offline for UI.
 })().catch(() => {
   /* ignore */
 });
-
-function ensureOpenMateTabHooks() {
-  if (state.tabHooks)
-    return;
-  state.tabHooks = true;
-  chrome.tabs.onActivated.addListener(async activeInfo => {
-    if (!state.recording || state.recording.status !== "active")
-      return;
-    const { tabId } = activeInfo;
-    state.recording.activeTabId = tabId;
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.url) {
-      state.coord.recordTab(tabId, tab.url);
-      try {
-        const d = new URL(tab.url);
-        if (!state.recording.visitedDomains.includes(d.hostname))
-          state.recording.visitedDomains.push(d.hostname);
-      } catch { /* */ }
-    }
-    const rel = Date.now() - state.startWallMs;
-    if (isSupportedPageUrl(tab.url)) {
-      const e = state.coord.appendTabLifecycleEvent("tab_switch", tabId, rel);
-      state.recording.events.push(e);
-      state.recording.stepCount = state.recording.events.length;
-      broadcastActivityRow(formatRecordingEvent(e));
-      void sendRecorderActivateToTab(tabId, {
-        type: "openmate.recorder.activate",
-        clientRecordingId: state.recording.clientRecordingId,
-        startWallMs: state.startWallMs,
-        voicePreference: state.recording.voicePreference,
-      }).catch(() => {});
-    } else {
-      const rpe: OpenMateRecordingEvent = {
-        eventId: randomId(),
-        timestampMs: rel,
-        tabId,
-        actionType: "restricted_page",
-        url: tab.url,
-        sensitivity: { classification: "none", valueCaptured: "captured", reasons: ["restricted"] },
-      };
-      state.recording.events.push(rpe);
-      state.recording.stepCount = state.recording.events.length;
-      broadcastActivityRow(formatRecordingEvent(rpe));
-    }
-  });
-
-  chrome.tabs.onRemoved.addListener(tabId => {
-    if (!state.recording || state.recording.status !== "active")
-      return;
-    const rel = Date.now() - state.startWallMs;
-    const e = state.coord.appendTabLifecycleEvent("tab_close", tabId, rel);
-    state.recording.events.push(e);
-    state.recording.stepCount = state.recording.events.length;
-    broadcastActivityRow(formatRecordingEvent(e));
-  });
-}
-
-async function putBytes(url: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
-  const res = await fetch(url, { method: "PUT", body, headers: { "content-type": contentType } });
-  return res.ok;
-}
 
 function mapHandoffError(code: string, message: string) {
   if (code === "HANDOFF_INVALID")
@@ -197,16 +159,24 @@ function mapHandoffError(code: string, message: string) {
   return err("HANDOFF_EXCHANGE_FAILED", message);
 }
 
-function newRecordingState(
+async function putBytes(url: string, body: ArrayBuffer, contentType: string): Promise<boolean> {
+  const res = await fetch(url, { method: "PUT", body, headers: { "content-type": contentType } });
+  return res.ok;
+}
+
+function extVersionLabel(): string {
+  return chrome.runtime.getManifest()?.version ?? "0.1.0";
+}
+
+function newSessionCtx(
   data: StartSessionResponse,
   clientRecordingId: string,
-  url: string,
-  title: string | undefined,
+  pageUrl: string,
+  _pageTitle: string | undefined,
   activeTabId: number,
   voice: VoiceStatus,
-  voicePreference: "prompt" | "on" | "off",
-  uploadSlots: UploadSlot[],
-): OpenMateRecordingSessionState {
+  voicePref: "prompt" | "on" | "off"
+): SessionCtx {
   return {
     clientRecordingId,
     backendSessionId: data.sessionId,
@@ -214,28 +184,11 @@ function newRecordingState(
     recordingConfigurationVersion: data.recordingConfigurationVersion,
     status: "active",
     startedAt: new Date(state.startWallMs).toISOString(),
-    startingUrl: url,
-    startingTabTitle: title,
     activeTabId,
-    voicePreference,
-    visitedDomains: (() => {
-      try {
-        return [new URL(url).hostname];
-      } catch {
-        return [];
-      }
-    })(),
-    stepCount: 0,
+    voicePreference: voicePref,
+    sessionUploadSlots: data.uploadSlots,
     voiceStatus: voice,
-    events: [],
-    tabMeta: new Map(),
-    sessionUploadSlots: uploadSlots,
-    voiceDurationMs: 0,
-    typedNoteCount: 0,
-    screenshotCount: 0,
-    guardrailSummary: { redactedInputCount: 0, suspectedPiiCount: 0, credentialFieldCount: 0, paymentFieldCount: 0 },
-    typedNotes: [],
-    screenshots: [],
+    voiceDurationMs: 0
   };
 }
 
@@ -245,40 +198,55 @@ async function startSessionAfterStartOk(
   pageUrl: string,
   pageTitle: string | undefined,
   voice: VoiceStatus,
-  voicePref: "prompt" | "on" | "off",
+  voicePref: "prompt" | "on" | "off"
 ): Promise<OpenMateResponse<unknown>> {
   const clientRecordingId = crypto.randomUUID();
-  state.coord = new RecordingSessionCoordinator();
   state.startWallMs = Date.now();
-  state.coord.start(clientRecordingId, activeTabId, voice, pageUrl);
-  resetInputActivityThrottle();
-  state.recording = newRecordingState(data, clientRecordingId, pageUrl, pageTitle, activeTabId, voice, voicePref, data.uploadSlots);
-  ensureOpenMateTabHooks();
-  const evSlot = findSlot(data.uploadSlots, "events");
-  if (evSlot) {
-    state.recording.eventsJsonUploadSlot = { objectKey: evSlot.objectKey, uploadUrl: evSlot.uploadUrl };
+  state.lastRecorderOutput = null;
+  clearActivityFeed();
+  setRecordingStartWall(state.startWallMs);
+
+  const recResult = startRecording({
+    clientRecordingId,
+    serverRecordingId: data.sessionId,
+    recorderVersion: `${RECORDER_VERSION_PREFIX}${extVersionLabel()}`,
+    startTimestampMs: state.startWallMs,
+    environment: { extensionVersion: `v${extVersionLabel()}` },
+    initialTab: {
+      tabId: activeTabId,
+      url: pageUrl,
+      title: pageTitle,
+      status: "active"
+    }
+  });
+  if (!recResult.ok) {
+    return err("RECORDING_START_FAILED", recResult.error.message);
   }
+
+  state.recording = newSessionCtx(data, clientRecordingId, pageUrl, pageTitle, activeTabId, voice, voicePref);
   const post = await sendRecorderActivateToTab(activeTabId, {
     type: "openmate.recorder.activate",
     clientRecordingId,
     startWallMs: state.startWallMs,
-    voicePreference: voicePref,
+    voicePreference: voicePref
   });
   if (!post.ok) {
     state.recording = null;
-    state.coord.stop();
+    clearActivityFeed();
+    discardRecording();
     return err("RECORDER_INJECTION_FAILED", post.message);
   }
+  pushActivitySummary("Recording started");
   return ok({
     clientRecordingId,
     status: "active",
-    voiceStatus: voice,
+    voiceStatus: voice
   });
 }
 
 export async function handleOpenMateMessage(
   request: OpenMateRequest,
-  sender: chrome.runtime.MessageSender,
+  sender: chrome.runtime.MessageSender
 ): Promise<OpenMateResponse<unknown>> {
   const base = await ensureApiBase();
   const ctx = buildCtx(base);
@@ -316,7 +284,7 @@ export async function handleOpenMateMessage(
       const user: ExtensionUser = {
         id: me.data.id,
         email: me.data.email,
-        displayName: me.data.displayName,
+        displayName: me.data.displayName
       };
       state.user = user;
       state.status = "connected";
@@ -324,23 +292,28 @@ export async function handleOpenMateMessage(
       return ok({ status: "connected" });
     }
     case "openmate.auth.getStatus": {
+      void takeStaleSessionError();
       const rec = state.recording;
+      const snap = getRecorderSnapshot();
+      const stepCount =
+        rec?.status === "active"
+          ? snap.eventCount
+          : state.lastRecorderOutput?.evidencePackage.events.length ?? snap.eventCount;
       const recording = rec
         ? {
             status: rec.status,
-            stepCount: rec.stepCount,
+            stepCount,
             clientRecordingId: rec.clientRecordingId,
             activeTabId: rec.activeTabId,
             pendingFormDefaults: rec.pendingFormDefaults,
-            stopSummary: rec.stopSummary,
+            stopSummary: rec.stopSummary
           }
         : undefined;
-      const activityLog = rec ? mergeActivityLog(rec, state.startWallMs) : undefined;
       return ok({
         status: state.status,
         user: state.user ?? undefined,
         recording,
-        activityLog,
+        activityLog: getActivityFeed()
       });
     }
     case "openmate.auth.refresh": {
@@ -355,6 +328,7 @@ export async function handleOpenMateMessage(
       state.accessToken = null;
       state.user = null;
       state.status = "signedOut";
+      clearActivityFeed();
       await clearSession();
       return ok({ status: "signedOut" });
     }
@@ -363,6 +337,9 @@ export async function handleOpenMateMessage(
         return err("AUTH_REQUIRED", "Connect the extension from the OpenMate dashboard first");
       }
       if (state.recording && (state.recording.status === "active" || state.recording.status === "starting")) {
+        return err("RECORDING_ALREADY_ACTIVE", "A recording is already in progress");
+      }
+      if (getRecorderStatus() === "active") {
         return err("RECORDING_ALREADY_ACTIVE", "A recording is already in progress");
       }
       const tab = await chrome.tabs.get(request.activeTabId).catch(() => null);
@@ -375,7 +352,7 @@ export async function handleOpenMateMessage(
       const voice = initialVoiceState(request.voicePreference, null);
       const st = await recClient.startRecordingSession(ctx, {
         recorderVersion: `${RECORDER_VERSION_PREFIX}${extVersionLabel()}`,
-        initialTitle: `${new URL(tab.url).hostname} flow - ${new Date().toLocaleString()}`,
+        initialTitle: `${new URL(tab.url).hostname} flow - ${new Date().toLocaleString()}`
       });
       if (!st.ok) {
         if (st.error.status === 401) {
@@ -383,31 +360,17 @@ export async function handleOpenMateMessage(
           if (rr) {
             const st2 = await recClient.startRecordingSession(ctx, {
               recorderVersion: `${RECORDER_VERSION_PREFIX}${extVersionLabel()}`,
-              initialTitle: `${new URL(tab.url).hostname} flow - ${new Date().toLocaleString()}`,
+              initialTitle: `${new URL(tab.url).hostname} flow - ${new Date().toLocaleString()}`
             });
             if (!st2.ok) {
               return err("AUTH_REQUIRED", st2.error.message);
             }
-            return startSessionAfterStartOk(
-              st2.data,
-              request.activeTabId,
-              tab.url!,
-              tab.title,
-              voice,
-              request.voicePreference,
-            );
+            return startSessionAfterStartOk(st2.data, request.activeTabId, tab.url!, tab.title, voice, request.voicePreference);
           }
         }
         return err("AUTH_REQUIRED", st.error.message);
       }
-      return startSessionAfterStartOk(
-        st.data,
-        request.activeTabId,
-        tab.url!,
-        tab.title,
-        voice,
-        request.voicePreference,
-      );
+      return startSessionAfterStartOk(st.data, request.activeTabId, tab.url!, tab.title, voice, request.voicePreference);
     }
     case "openmate.recording.event": {
       if (!state.recording || state.recording.clientRecordingId !== request.clientRecordingId) {
@@ -416,49 +379,24 @@ export async function handleOpenMateMessage(
       if (state.recording.status !== "active") {
         return err("RECORDING_NOT_ACTIVE", "Recording is not active");
       }
-      const raw = (request.event as unknown) as OpenMateRecordingEvent & Partial<RawRecorderEvent>;
-      if (sender.tab?.id && (raw.tabId === undefined || raw.tabId === 0)) {
-        raw.tabId = sender.tab.id;
+      const raw = request.event;
+      const tabId =
+        sender.tab?.id && (raw.tabId === undefined || raw.tabId === 0) ? sender.tab.id : raw.tabId;
+      if (!tabId) {
+        return err("RECORDING_NOT_ACTIVE", "Missing tab for event");
       }
-      let ev: OpenMateRecordingEvent;
-      if (raw.sensitivity && raw.eventId) {
-        ev = request.event;
-        updateGuardSummary(state.recording.guardrailSummary, ev.sensitivity);
-      } else {
-        const rawEv: RawRecorderEvent = {
-          actionType: raw.actionType!,
-          tabId: raw.tabId,
-          timestampMs: raw.timestampMs,
-          url: raw.url,
-          pageTitle: raw.pageTitle,
-          selectorCandidates: raw.selectorCandidates,
-          elementRole: raw.elementRole,
-          elementLabel: raw.elementLabel,
-          boundingRect: raw.boundingRect,
-          value: raw.value,
-          keyPressed: raw.keyPressed,
-          inputContext: (raw as { inputContext?: import("./guardrails").InputContext }).inputContext,
-        };
-        ev = normalizeRawRecorderEvent(rawEv);
-        updateGuardSummary(state.recording.guardrailSummary, ev.sensitivity);
-      }
-      const tOff = ev.timestampMs;
-      const e2: OpenMateRecordingEvent = { ...ev, timestampMs: tOff };
-      state.recording.events.push(e2);
-      state.recording.stepCount = state.recording.events.length;
-      if (e2.actionType !== "input" || shouldBroadcastInputActivity())
-        broadcastActivityRow(formatRecordingEvent(e2));
-      if (e2.url) {
-        try {
-          const h = new URL(e2.url).hostname;
-          if (!state.recording.visitedDomains.includes(h)) {
-            state.recording.visitedDomains.push(h);
-          }
-        } catch { /* */ }
-      }
+      const ev: OpenMateRecordingEvent = {
+        ...raw,
+        tabId,
+        sensitivity: raw.sensitivity ?? { classification: "none", valueCaptured: "captured", reasons: [] }
+      };
+      captureDomEventFromExtension(ev, state.startWallMs, tabId);
+      pushActivitySummary(formatOpenMateEventSummary(ev));
+      broadcastPanelPoke();
+      const s2 = getRecorderSnapshot();
       return ok({
-        sequenceIndex: state.recording.events.length - 1,
-        stepCount: state.recording.events.length,
+        sequenceIndex: Math.max(0, s2.eventCount - 1),
+        stepCount: s2.eventCount
       });
     }
     case "openmate.recording.attachNote": {
@@ -468,9 +406,7 @@ export async function handleOpenMateMessage(
       if (state.recording.status !== "active") {
         return err("RECORDING_NOT_ACTIVE", "Recording is not active");
       }
-      const noteTab = request.tabId > 0
-        ? request.tabId
-        : (sender.tab?.id ?? state.recording.activeTabId ?? 0);
+      const noteTab = request.tabId > 0 ? request.tabId : (sender.tab?.id ?? state.recording.activeTabId ?? 0);
       if (!noteTab) {
         return err("RECORDING_NOT_ACTIVE", "Missing tab for note");
       }
@@ -478,13 +414,10 @@ export async function handleOpenMateMessage(
       if (!t) {
         return err("EMPTY_NOTE", "Note is empty");
       }
-      const nid = createNoteId();
-      const nearest = nearestEventId(state.recording.events, noteTab, request.timestampMs);
-      const note: TypedNoteRecord = { noteId: nid, text: t, tabId: noteTab, timestampMs: request.timestampMs, nearestEventId: nearest };
-      state.recording.typedNotes.push(note);
-      state.recording.typedNoteCount = state.recording.typedNotes.length;
-      broadcastActivityRow(formatNoteActivity(note, state.startWallMs));
-      return ok({ noteId: nid, nearestEventId: nearest ?? "" });
+      attachUserNote(t, noteTab, request.timestampMs);
+      pushActivitySummary("Note added");
+      broadcastPanelPoke();
+      return ok({ noteId: "package", nearestEventId: "" });
     }
     case "openmate.recording.takeScreenshot": {
       if (!state.recording || state.recording.clientRecordingId !== request.clientRecordingId) {
@@ -493,9 +426,7 @@ export async function handleOpenMateMessage(
       if (state.recording.status !== "active") {
         return err("RECORDING_NOT_ACTIVE", "Recording is not active");
       }
-      const capTab = request.tabId > 0
-        ? request.tabId
-        : (sender.tab?.id ?? state.recording.activeTabId ?? 0);
+      const capTab = request.tabId > 0 ? request.tabId : (sender.tab?.id ?? state.recording.activeTabId ?? 0);
       if (!capTab) {
         return err("SCREENSHOT_BLOCKED", "Missing tab for screenshot");
       }
@@ -513,16 +444,12 @@ export async function handleOpenMateMessage(
       }
       const blob = await dataUrlToBlob(cap);
       const ab = await blob.arrayBuffer();
-      const sid = newScreenshotId();
-      const shot = { screenshotId: sid, tabId: capTab, timestampMs: request.timestampMs, png: ab };
-      state.recording.screenshots.push(shot);
-      state.recording.screenshotCount = state.recording.screenshots.length;
-      broadcastActivityRow(formatScreenshotActivity(shot, state.startWallMs));
-      return ok({
-        screenshotId: sid,
-        sequenceNumber: state.recording.screenshots.length,
-        nearestEventId: nearestEventId(state.recording.events, capTab, request.timestampMs) ?? "",
-      });
+      const bytes = new Uint8Array(ab);
+      state.recording.lastScreenshotPng = ab;
+      attachScreenshotBytes(bytes, blob.type || "image/png", capTab, request.timestampMs);
+      pushActivitySummary("Screenshot captured");
+      broadcastPanelPoke();
+      return ok({ screenshotId: "package", sequenceNumber: getRecorderSnapshot().attachmentCount, nearestEventId: "" });
     }
     case "openmate.recording.stopForReview": {
       if (!state.recording || state.recording.clientRecordingId !== request.clientRecordingId) {
@@ -531,19 +458,47 @@ export async function handleOpenMateMessage(
       if (state.recording.status !== "active") {
         return err("RECORDING_NOT_ACTIVE", "Recording is not active");
       }
-      const now = new Date().toISOString();
-      state.recording = applyStopForReview(state.recording, state.recording.voiceStatus, now);
-      state.coord.stop();
+      const r = stopRecording();
+      if (!r.ok) {
+        return err("RECORDER_STOP_FAILED", r.error.message);
+      }
+      const out = r.data;
+      state.lastRecorderOutput = out;
+      const ep = out.evidencePackage;
+      const typedNoteCount = ep.attachments.filter((a) => a.type === "note").length;
+      const screenshotCount = ep.attachments.filter((a) => a.type === "screenshot").length;
+      const cur = state.recording;
+      const ct = ep.tabs[0]?.currentTitle;
+      const titleText =
+        ct && typeof ct === "object" && "text" in ct && typeof (ct as { text?: string }).text === "string"
+          ? (ct as { text: string }).text.slice(0, 200)
+          : "Recording";
+      state.recording = {
+        ...cur,
+        status: "stoppedPendingForm",
+        pendingFormDefaults: {
+          title: titleText,
+          allowedDomains: [],
+          tags: []
+        },
+        stopSummary: {
+          stepCount: ep.events.length,
+          voiceDurationMs: cur.voiceDurationMs,
+          typedNoteCount,
+          screenshotCount
+        }
+      };
+      pushActivitySummary("Recording stopped — fill in details to save");
       broadcastPanelPoke();
       return ok({
         status: "stoppedPendingForm",
-        defaults: state.recording.pendingFormDefaults,
-        summary: {
-          stepCount: state.recording.stopSummary?.stepCount ?? state.recording.stepCount,
-          voiceDurationMs: state.recording.voiceDurationMs,
-          typedNoteCount: state.recording.typedNoteCount,
-          screenshotCount: state.recording.screenshotCount,
-        },
+        defaults: state.recording.pendingFormDefaults ?? { title: "", allowedDomains: [], tags: [] },
+        summary: state.recording.stopSummary ?? {
+          stepCount: 0,
+          voiceDurationMs: 0,
+          typedNoteCount: 0,
+          screenshotCount: 0
+        }
       });
     }
     case "openmate.recording.submit": {
@@ -564,8 +519,7 @@ export async function handleOpenMateMessage(
       return err("UPLOAD_FAILED", "Re-open the status page with an active session to complete recovery.");
     }
     case "openmate.recording.discard": {
-      const id = state.recording?.clientRecordingId ?? null;
-      if (request.clientRecordingId && state.recording?.clientRecordingId !== request.clientRecordingId) {
+      if (state.recording?.clientRecordingId && request.clientRecordingId && state.recording.clientRecordingId !== request.clientRecordingId) {
         if (request.confirmed) {
           await clearPendingUpload(request.clientRecordingId);
         }
@@ -577,9 +531,10 @@ export async function handleOpenMateMessage(
         }
         const rid = state.recording.clientRecordingId;
         state.recording = null;
-        state.coord.stop();
+        state.lastRecorderOutput = null;
         lastSubmitMetadata = null;
-        resetInputActivityThrottle();
+        discardRecording();
+        clearActivityFeed();
         await clearPendingUpload(rid);
         broadcastPanelPoke();
         return ok({ status: "discarded" });
@@ -587,6 +542,7 @@ export async function handleOpenMateMessage(
       if (request.confirmed) {
         await clearPendingUpload(request.clientRecordingId);
         lastSubmitMetadata = null;
+        clearActivityFeed();
         broadcastPanelPoke();
         return ok({ status: "discarded" });
       }
@@ -596,16 +552,12 @@ export async function handleOpenMateMessage(
   return err("UNHANDLED", "Unhandled OpenMate message");
 }
 
-function extVersionLabel(): string {
-  return chrome.runtime.getManifest()?.version ?? "0.1.0";
-}
-
 async function runUploadAndComplete(
   ctx: FetchJsonContext,
   metadata: SkillMetadataDraft,
-  isRetry: boolean,
+  isRetry: boolean
 ): Promise<OpenMateResponse<unknown>> {
-  if (!state.recording) {
+  if (!state.recording || !state.lastRecorderOutput) {
     return err("RECORDING_NOT_FOUND", "Nothing to upload");
   }
   if (!["stoppedPendingForm", "uploadFailed"].includes(state.recording.status)) {
@@ -617,101 +569,103 @@ async function runUploadAndComplete(
   if (!state.recording.backendSessionId) {
     return err("UPLOAD_FAILED", "Missing backend session; restart the recording and try again");
   }
-
-  const final = buildM2CPayload(
-    state.recording,
-    { ...metadata, title: metadata.title.trim(), humanDescription: metadata.humanDescription ?? null },
-    `v${extVersionLabel()}`,
-  );
-  try {
-    assertValidM2cPayload(final);
-  } catch (e) {
-    return err("BACKEND_VALIDATION_FAILED", e instanceof Error ? e.message : "Invalid payload");
-  }
-
+  const backendSessionId = state.recording.backendSessionId;
+  const out = state.lastRecorderOutput;
+  const m2cPayload: Record<string, unknown> = {
+    schema: "openmate.recorder.v1",
+    clientRecordingId: out.evidencePackage.clientRecordingId,
+    evidenceSchemaVersion: out.evidencePackage.schemaVersion,
+    eventCount: out.evidencePackage.events.length,
+    extensionVersion: `v${extVersionLabel()}`,
+    metadata: {
+      title: metadata.title.trim(),
+      humanDescription: metadata.humanDescription ?? null,
+      allowedDomains: metadata.allowedDomains,
+      tags: metadata.tags
+    }
+  };
   if (!isRetry) {
-    state.recording.status = "uploading";
+    state.recording = { ...state.recording, status: "uploading" };
     broadcastPanelPoke();
   }
 
   let uploadSlots: UploadSlot[] = state.recording.sessionUploadSlots;
   if (isRetry) {
-    const re = await recClient.reissueUploads(ctx, state.recording.backendSessionId, {});
+    const re = await recClient.reissueUploads(ctx, backendSessionId, {});
     if (!re.ok) {
-      state.recording.status = "uploadFailed";
       if (state.recording.backendSessionId) {
+        state.recording = { ...state.recording, status: "uploadFailed" };
         await savePendingUpload({
           clientRecordingId: state.recording.clientRecordingId,
-          backendSessionId: state.recording.backendSessionId,
-          skillId: state.recording.skillId!,
-          recordingConfigurationVersion: state.recording.recordingConfigurationVersion!,
+          backendSessionId,
+          skillId: state.recording.skillId ?? "",
+          recordingConfigurationVersion: state.recording.recordingConfigurationVersion ?? "",
           storagePrefix: "",
           uploadSlots: state.recording.sessionUploadSlots,
           lastErrorCode: re.error.code,
-          updatedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
         });
       }
       broadcastPanelPoke();
       return err("UPLOAD_FAILED", re.error.message);
     }
     uploadSlots = mergeReissuedSlots(state.recording.sessionUploadSlots, re.data.uploadSlots);
-    state.recording.sessionUploadSlots = uploadSlots;
+    state.recording = { ...state.recording, sessionUploadSlots: uploadSlots };
   }
 
-  const eventsJson = buildEventsUploadBody(state.recording.events);
-  const eventsText = JSON.stringify(eventsJson);
-  const eventsHash = await sha256HexOfJson(eventsJson);
+  const eventsText = out.files[0]?.body ?? JSON.stringify(out.evidencePackage, null, 2);
+  const eventsHash = await sha256HexOfBytes(new TextEncoder().encode(eventsText));
   const eventsSlot = findSlot(uploadSlots, "events") ?? uploadSlots.find(s => s.objectKey.endsWith("events.json"));
   if (!eventsSlot) {
-    state.recording.status = "uploadFailed";
+    state.recording = { ...state.recording, status: "uploadFailed" };
     broadcastPanelPoke();
     return err("UPLOAD_FAILED", "Backend did not return an events upload target");
   }
   const okE = await putBytes(eventsSlot.uploadUrl, new TextEncoder().encode(eventsText).buffer, "application/json");
   if (!okE) {
-    const re = await recClient.reissueUploads(ctx, state.recording.backendSessionId, { slots: ["events"] });
+    const re = await recClient.reissueUploads(ctx, backendSessionId, { slots: ["events"] });
     if (re.ok) {
-      state.recording.sessionUploadSlots = mergeReissuedSlots(uploadSlots, re.data.uploadSlots);
-      uploadSlots = state.recording.sessionUploadSlots;
-      const slot2 = findSlot(uploadSlots, "events");
+      state.recording = { ...state.recording, sessionUploadSlots: mergeReissuedSlots(uploadSlots, re.data.uploadSlots) };
+      const uploadSlots2 = state.recording.sessionUploadSlots;
+      const slot2 = findSlot(uploadSlots2, "events");
       if (slot2) {
         const r2 = await putBytes(slot2.uploadUrl, new TextEncoder().encode(eventsText).buffer, "application/json");
         if (!r2) {
-          state.recording.status = "uploadFailed";
+          state.recording = { ...state.recording, status: "uploadFailed" };
           broadcastPanelPoke();
           return err("UPLOAD_FAILED", "Could not upload events artifact after reissue");
         }
       } else {
-        state.recording.status = "uploadFailed";
+        state.recording = { ...state.recording, status: "uploadFailed" };
         broadcastPanelPoke();
         return err("UPLOAD_FAILED", "Reissue did not return events target");
       }
     } else {
-      state.recording.status = "uploadFailed";
+      state.recording = { ...state.recording, status: "uploadFailed" };
       broadcastPanelPoke();
       return err("UPLOAD_FAILED", "Could not upload events");
     }
   }
 
-  const png = state.recording.screenshots[0]?.png ?? minPngBuffer();
+  const png = state.recording.lastScreenshotPng ?? minPngBuffer();
   const screenSlot = findSlot(uploadSlots, "screenshot1") ?? uploadSlots.find(s => s.objectKey.includes("screenshot"));
   if (!screenSlot) {
-    state.recording.status = "uploadFailed";
+    state.recording = { ...state.recording, status: "uploadFailed" };
     broadcastPanelPoke();
     return err("UPLOAD_FAILED", "Backend did not return a screenshot upload target");
   }
   const imgHash = await sha256HexOfBytes(png);
   const okP = await putBytes(screenSlot.uploadUrl, png, "image/png");
   if (!okP) {
-    const re = await recClient.reissueUploads(ctx, state.recording.backendSessionId, { slots: ["screenshot1", "events"] });
+    const re = await recClient.reissueUploads(ctx, backendSessionId, { slots: ["screenshot1", "events"] });
     if (re.ok) {
-      state.recording.sessionUploadSlots = mergeReissuedSlots(state.recording.sessionUploadSlots, re.data.uploadSlots);
+      state.recording = { ...state.recording, sessionUploadSlots: mergeReissuedSlots(state.recording.sessionUploadSlots, re.data.uploadSlots) };
       const us = state.recording.sessionUploadSlots;
       const s2 = findSlot(us, "screenshot1");
       if (s2) {
         const p2 = await putBytes(s2.uploadUrl, png, "image/png");
         if (!p2) {
-          state.recording.status = "uploadFailed";
+          state.recording = { ...state.recording, status: "uploadFailed" };
           broadcastPanelPoke();
           return err("UPLOAD_FAILED", "Screenshot upload failed");
         }
@@ -720,7 +674,7 @@ async function runUploadAndComplete(
         return err("UPLOAD_FAILED", "Reissue did not return screenshot target");
       }
     } else {
-      state.recording.status = "uploadFailed";
+      state.recording = { ...state.recording, status: "uploadFailed" };
       broadcastPanelPoke();
       return err("UPLOAD_FAILED", "Screenshot upload failed");
     }
@@ -728,53 +682,48 @@ async function runUploadAndComplete(
 
   const manifest: Record<string, unknown> = {
     clientRecordingId: state.recording.clientRecordingId,
-    recordingConfigurationVersion: state.recording.recordingConfigurationVersion,
-    m2cPayload: final,
+    recordingConfigurationVersion: state.recording.recordingConfigurationVersion ?? "",
+    m2cPayload,
+    recordingArtifacts: { evidencePackageSchema: out.evidencePackage.schemaVersion },
     artifacts: {
       events: { objectKey: "events.json", sha256: eventsHash },
-      screenshot1: { objectKey: "screenshots/1.png", sha256: imgHash },
-    },
+      screenshot1: { objectKey: "screenshots/1.png", sha256: imgHash }
+    }
   };
-
-  const comp = await recClient.completeRecordingSession(
-    ctx,
-    state.recording.backendSessionId,
-    {
-      title: metadata.title.trim(),
-      humanDescription: metadata.humanDescription ?? null,
-      allowedDomains: metadata.allowedDomains,
-      tags: metadata.tags,
-      manifest,
-    },
-  );
+  const comp = await recClient.completeRecordingSession(ctx, backendSessionId, {
+    title: metadata.title.trim(),
+    humanDescription: metadata.humanDescription ?? null,
+    allowedDomains: metadata.allowedDomains,
+    tags: metadata.tags,
+    manifest
+  });
 
   if (!comp.ok) {
-    state.recording.status = "uploadFailed";
     if (state.recording.backendSessionId) {
+      state.recording = { ...state.recording, status: "uploadFailed" };
       await savePendingUpload({
         clientRecordingId: state.recording.clientRecordingId,
-        backendSessionId: state.recording.backendSessionId,
-        skillId: state.recording.skillId!,
-        recordingConfigurationVersion: state.recording.recordingConfigurationVersion!,
+        backendSessionId,
+        skillId: state.recording.skillId ?? "",
+        recordingConfigurationVersion: state.recording.recordingConfigurationVersion ?? "",
         storagePrefix: "",
         uploadSlots: state.recording.sessionUploadSlots,
         lastErrorCode: comp.error.code,
-        updatedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
       });
     }
     broadcastPanelPoke();
     return err("UPLOAD_FAILED", comp.error.message);
   }
-
   const skill = comp.data.skillId;
-  const dashboardUrl = `https://openmate.ai/s/${encodeURIComponent(skill)}`;
   const rid = state.recording.clientRecordingId;
+  const dashboardUrl = `https://openmate.ai/s/${encodeURIComponent(skill)}`;
   state.recording = null;
+  state.lastRecorderOutput = null;
   lastSubmitMetadata = null;
-  state.coord.stop();
-  resetInputActivityThrottle();
+  clearActivityFeed();
   await clearPendingUpload(rid);
   broadcastPanelPoke();
-
   return ok({ status: "uploaded", skillId: comp.data.skillId, dashboardUrl });
 }
+

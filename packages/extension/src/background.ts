@@ -18,6 +18,8 @@ import { RelayConnection, debugLog } from './relayConnection';
 import { handleOpenMateMessage } from './recorder/openMateHandlers';
 import { isOpenMateRequest } from './recorder/messages';
 import { registerPanelPortListeners } from './recorder/panelPort';
+import { onRecorderServiceWorkerStartup } from './recorder/recorderHost';
+import { registerTabSignalAdapter } from './recorder/tabSignalAdapter';
 
 type PageMessage = {
   type: 'connectToMCPRelay';
@@ -245,6 +247,8 @@ class TabShareExtension {
 
 new TabShareExtension();
 
+void onRecorderServiceWorkerStartup();
+registerTabSignalAdapter();
 registerPanelPortListeners();
 if (chrome.sidePanel?.setPanelBehavior) {
   void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });

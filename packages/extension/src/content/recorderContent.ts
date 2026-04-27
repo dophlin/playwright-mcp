@@ -2,7 +2,6 @@
  * Records supported workflow events and forwards them to the service worker.
  * Ignores events originating from the OpenMate HUD or marked ignore regions.
  */
-import { classifyInput, redactValue, type InputContext } from "../recorder/guardrails";
 import type { OpenMateActionType, OpenMateRecordingEvent, SensitivitySnapshot } from "../recorder/types";
 
 const OM_IGNORE = "[data-openmate-ignore-capture]";
@@ -39,17 +38,6 @@ function pickLabel(el: Element) {
     }
   }
   return (el as HTMLElement).innerText?.trim()?.slice(0, 200) || undefined;
-}
-
-function inputContextFor(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement): InputContext {
-  return {
-    name: el.getAttribute("name"),
-    id: el.getAttribute("id"),
-    type: el.getAttribute("type"),
-    autocomplete: el.getAttribute("autocomplete") ?? undefined,
-    labelText: pickLabel(el),
-    placeholder: el.getAttribute("placeholder") ?? undefined,
-  };
 }
 
 function makeEvent(
@@ -91,16 +79,12 @@ function onClick(e: MouseEvent) {
     return;
   }
   const r = t.getBoundingClientRect();
-  const s = classifyInput(
-    { name: t.getAttribute("name") ?? undefined, type: t.getAttribute("type") ?? undefined, labelText: pickLabel(t) },
-    null,
-  );
   makeEvent("click", {
     elementLabel: pickLabel(t),
     elementRole: t.getAttribute("role") || t.tagName.toLowerCase(),
     selectorCandidates: [{ type: "css", value: buildCssPath(t) }],
     boundingRect: { x: r.x, y: r.y, width: r.width, height: r.height },
-    sensitivity: s as SensitivitySnapshot,
+    sensitivity: { classification: "none", valueCaptured: "captured", reasons: [] } as SensitivitySnapshot,
   });
 }
 
@@ -112,14 +96,12 @@ function onInput(e: Event) {
   if (!(t instanceof HTMLInputElement) && !(t instanceof HTMLTextAreaElement)) {
     return;
   }
-  const sens = classifyInput(inputContextFor(t as HTMLInputElement & HTMLTextAreaElement), t.value);
-  const v = redactValue(sens.classification, t.value);
   makeEvent("input", {
-    value: v,
+    value: t.value,
     elementLabel: pickLabel(t),
     elementRole: t.getAttribute("role") || t.tagName.toLowerCase(),
     selectorCandidates: [{ type: "css", value: buildCssPath(t) }],
-    sensitivity: sens as SensitivitySnapshot,
+    sensitivity: { classification: "none", valueCaptured: "captured", reasons: [] } as SensitivitySnapshot,
   });
 }
 

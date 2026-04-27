@@ -1,4 +1,4 @@
-import { isRestrictedPageUrl } from "./pageSupport";
+import { isSupportedPageUrl } from "./pageSupportAdapter";
 import { randomId } from "./ids";
 
 /**
@@ -7,7 +7,7 @@ import { randomId } from "./ids";
  */
 export function assertScreenshotNotBlockedForUrl(url: string | undefined | null):
   { ok: true } | { ok: false; code: "RESTRICTED_PAGE" | "SCREENSHOT_BLOCKED" } {
-  if (isRestrictedPageUrl(url)) {
+  if (!isSupportedPageUrl(url)) {
     return { ok: false, code: "RESTRICTED_PAGE" };
   }
   return { ok: true };

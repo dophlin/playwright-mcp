@@ -1,6 +1,6 @@
-import type { ActivityRow } from "./activityFormat";
-
 export const PANEL_PORT_NAME = "openmate.panel";
+
+export type ActivityRow = { id: string; offsetMs: number; summary: string };
 
 const ports = new Set<chrome.runtime.Port>();
 

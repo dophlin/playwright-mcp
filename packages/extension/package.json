@@ -22,6 +22,9 @@
     "lint": "tsc --project .",
     "clean": "rm -rf dist test-results"
   },
+  "dependencies": {
+    "@openmate/extension-recorder": "file:../../../packages/openmate-extension-recorder"
+  },
   "devDependencies": {
     "@types/chrome": "^0.0.315",
     "@types/react": "^18.2.66",
