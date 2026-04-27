@@ -9,6 +9,20 @@ const OM_IGNORE = "[data-openmate-ignore-capture]";
 let activeId: string | null = null;
 let startWall = 0;
 
+function isExtensionContextInvalidatedError(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e);
+  return m.includes("Extension context invalidated") || m.includes("message port closed");
+}
+
+/**
+ * After reload/update the old content script's `chrome.runtime` is dead; stop listeners so we do not throw on every click.
+ */
+function tearDownInvalidatedContext(): void {
+  stop();
+  activeId = null;
+  startWall = 0;
+}
+
 function relNow() {
   return Date.now() - startWall;
 }
@@ -63,11 +77,24 @@ function makeEvent(
     keyPressed: extra.keyPressed,
     sensitivity: extra.sensitivity ?? { classification: "none", valueCaptured: "captured", reasons: [] },
   };
-  void chrome.runtime.sendMessage({
-    type: "openmate.recording.event",
-    clientRecordingId: activeId,
-    event: ev,
-  });
+  try {
+    const pending = chrome.runtime.sendMessage({
+      type: "openmate.recording.event",
+      clientRecordingId: activeId,
+      event: ev,
+    });
+    if (pending && typeof (pending as Promise<unknown>).catch === "function") {
+      void (pending as Promise<unknown>).catch((e: unknown) => {
+        if (isExtensionContextInvalidatedError(e)) {
+          tearDownInvalidatedContext();
+        }
+      });
+    }
+  } catch (e) {
+    if (isExtensionContextInvalidatedError(e)) {
+      tearDownInvalidatedContext();
+    }
+  }
 }
 
 function onClick(e: MouseEvent) {
@@ -131,19 +158,34 @@ function stop() {
       _s,
       sendResponse: (r: boolean) => void,
     ) => {
+      const safeRespond = (ok: boolean) => {
+        try {
+          sendResponse(ok);
+        } catch (e) {
+          if (isExtensionContextInvalidatedError(e)) {
+            tearDownInvalidatedContext();
+          }
+        }
+      };
       if (msg?.type === "openmate.recorder.activate" && msg.clientRecordingId && msg.startWallMs) {
-        stop();
-        activeId = msg.clientRecordingId;
-        startWall = msg.startWallMs;
-        start();
-        sendResponse(true);
+        try {
+          stop();
+          activeId = msg.clientRecordingId;
+          startWall = msg.startWallMs;
+          start();
+          safeRespond(true);
+        } catch (e) {
+          if (isExtensionContextInvalidatedError(e)) {
+            tearDownInvalidatedContext();
+          }
+        }
         return true;
       }
       if (msg?.type === "openmate.recorder.refresh" && msg.clientRecordingId && msg.startWallMs) {
         if (msg.clientRecordingId === activeId) {
           startWall = msg.startWallMs;
         }
-        sendResponse(true);
+        safeRespond(true);
         return true;
       }
       return false;

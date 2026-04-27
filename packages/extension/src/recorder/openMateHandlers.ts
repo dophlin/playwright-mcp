@@ -22,6 +22,8 @@ import {
   pushActivitySummary,
   setRecordingStartWall
 } from "./activityFeed";
+import { setRecorderActivationContext } from "./recorderActivationContext";
+import { registerRecordingActiveTabListener } from "./recorderTabSync";
 import {
   discardRecording,
   getRecorderSnapshot,
@@ -79,6 +81,12 @@ const state: AppState = {
   lastRecorderOutput: null,
   startWallMs: 0
 };
+
+registerRecordingActiveTabListener(tabId => {
+  if (state.recording?.status === "active") {
+    state.recording = { ...state.recording, activeTabId: tabId };
+  }
+});
 
 let lastSubmitMetadata: SkillMetadataDraft | null = null;
 let cachedBase: string | null = null;
@@ -232,10 +240,16 @@ async function startSessionAfterStartOk(
   });
   if (!post.ok) {
     state.recording = null;
+    setRecorderActivationContext(null);
     clearActivityFeed();
     discardRecording();
     return err("RECORDER_INJECTION_FAILED", post.message);
   }
+  setRecorderActivationContext({
+    clientRecordingId,
+    startWallMs: state.startWallMs,
+    voicePreference: voicePref
+  });
   pushActivitySummary("Recording started");
   return ok({
     clientRecordingId,
@@ -328,6 +342,7 @@ export async function handleOpenMateMessage(
       state.accessToken = null;
       state.user = null;
       state.status = "signedOut";
+      setRecorderActivationContext(null);
       clearActivityFeed();
       await clearSession();
       return ok({ status: "signedOut" });
@@ -488,6 +503,7 @@ export async function handleOpenMateMessage(
           screenshotCount
         }
       };
+      setRecorderActivationContext(null);
       pushActivitySummary("Recording stopped — fill in details to save");
       broadcastPanelPoke();
       return ok({
@@ -533,6 +549,7 @@ export async function handleOpenMateMessage(
         state.recording = null;
         state.lastRecorderOutput = null;
         lastSubmitMetadata = null;
+        setRecorderActivationContext(null);
         discardRecording();
         clearActivityFeed();
         await clearPendingUpload(rid);

@@ -1,11 +1,36 @@
+import { sendRecorderActivateToTab } from "./contentScriptBridge";
+import { getRecorderActivationContext } from "./recorderActivationContext";
 import { pushActivitySummary } from "./activityFeed";
 import { afterRecorderMutation, getOpenMateRecorder } from "./recorderHost";
+import { isSupportedPageUrl } from "./pageSupportAdapter";
+import { notifyRecordingActiveTabChanged } from "./recorderTabSync";
 
 let installed = false;
 
 function activeRecorderOrNull() {
   const r = getOpenMateRecorder();
   return r.status === "active" ? r : null;
+}
+
+/**
+ * Injects or refreshes the recorder content script for this tab so DOM events are captured
+ * (e.g. after opening a link in a new tab and switching to it, or when a slow page loads after focus).
+ */
+async function attemptActivateRecorderOnTab(tabId: number): Promise<void> {
+  const ctx = getRecorderActivationContext();
+  if (!ctx) {
+    return;
+  }
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.url || !isSupportedPageUrl(tab.url)) {
+    return;
+  }
+  await sendRecorderActivateToTab(tabId, {
+    type: "openmate.recorder.activate",
+    clientRecordingId: ctx.clientRecordingId,
+    startWallMs: ctx.startWallMs,
+    voicePreference: ctx.voicePreference
+  });
 }
 
 export function registerTabSignalAdapter(): void {
@@ -44,6 +69,7 @@ export function registerTabSignalAdapter(): void {
     if (!rec) {
       return;
     }
+    notifyRecordingActiveTabChanged(activeInfo.tabId);
     rec.capture({
       eventType: "tab_switch",
       tabId: activeInfo.tabId,
@@ -51,9 +77,23 @@ export function registerTabSignalAdapter(): void {
     });
     afterRecorderMutation();
     pushActivitySummary("Switched tab");
+    void attemptActivateRecorderOnTab(activeInfo.tabId);
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === "complete") {
+      void (async () => {
+        if (!activeRecorderOrNull()) {
+          return;
+        }
+        const t = await chrome.tabs.get(tabId).catch(() => null);
+        if (!t?.active || !t.url || !isSupportedPageUrl(t.url)) {
+          return;
+        }
+        await attemptActivateRecorderOnTab(tabId);
+      })();
+    }
+
     if (changeInfo.status === "loading" && !changeInfo.url) {
       return;
     }
