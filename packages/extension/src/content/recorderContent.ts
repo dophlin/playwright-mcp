@@ -11,7 +11,18 @@ let startWall = 0;
 
 function isExtensionContextInvalidatedError(e: unknown): boolean {
   const m = e instanceof Error ? e.message : String(e);
-  return m.includes("Extension context invalidated") || m.includes("message port closed");
+  const lower = m.toLowerCase();
+  return (
+    m.includes("Extension context invalidated") ||
+    lower.includes("context invalidated") ||
+    m.includes("message port closed")
+  );
+}
+
+function handlePossibleInvalidatedSendError(e: unknown): void {
+  if (isExtensionContextInvalidatedError(e)) {
+    tearDownInvalidatedContext();
+  }
 }
 
 /**
@@ -78,22 +89,17 @@ function makeEvent(
     sensitivity: extra.sensitivity ?? { classification: "none", valueCaptured: "captured", reasons: [] },
   };
   try {
-    const pending = chrome.runtime.sendMessage({
-      type: "openmate.recording.event",
-      clientRecordingId: activeId,
-      event: ev,
-    });
-    if (pending && typeof (pending as Promise<unknown>).catch === "function") {
-      void (pending as Promise<unknown>).catch((e: unknown) => {
-        if (isExtensionContextInvalidatedError(e)) {
-          tearDownInvalidatedContext();
-        }
-      });
-    }
+    // Always route through Promise.resolve: Chrome may return a thenable that is not a native
+    // Promise (no .catch), which would otherwise leave "Extension context invalidated" rejections uncaught.
+    void Promise.resolve(
+      chrome.runtime.sendMessage({
+        type: "openmate.recording.event",
+        clientRecordingId: activeId,
+        event: ev,
+      }),
+    ).catch(handlePossibleInvalidatedSendError);
   } catch (e) {
-    if (isExtensionContextInvalidatedError(e)) {
-      tearDownInvalidatedContext();
-    }
+    handlePossibleInvalidatedSendError(e);
   }
 }
 
@@ -162,9 +168,7 @@ function stop() {
         try {
           sendResponse(ok);
         } catch (e) {
-          if (isExtensionContextInvalidatedError(e)) {
-            tearDownInvalidatedContext();
-          }
+          handlePossibleInvalidatedSendError(e);
         }
       };
       if (msg?.type === "openmate.recorder.activate" && msg.clientRecordingId && msg.startWallMs) {
@@ -175,9 +179,7 @@ function stop() {
           start();
           safeRespond(true);
         } catch (e) {
-          if (isExtensionContextInvalidatedError(e)) {
-            tearDownInvalidatedContext();
-          }
+          handlePossibleInvalidatedSendError(e);
         }
         return true;
       }
