@@ -17,7 +17,7 @@ export const API_PREFIX = "/v1";
 
 const DEFAULT_DASHBOARDS = [
   "https://dash-16-58-144-221.nip.io",
-  "http://localhost:3001",
+  "https://dash-16-58-144-221.nip.io",
   "http://127.0.0.1:3001",
   "http://localhost:5173",
   "http://127.0.0.1:5173",
